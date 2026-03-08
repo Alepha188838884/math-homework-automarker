@@ -1,0 +1,47 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Secrets / local config
+.env
+.env.*
+*.pem
+*.key
+*.p12
+
+# Logs
+*.log
+
+# Databases / local state
+*.db
+*.sqlite
+*.sqlite3
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/tsconfig.tsbuildinfo
+
+# Runtime data / uploaded files / generated artifacts
+data/
+result.json
+app.db
+1.pdf
+L1_HW_solution.docx
+
