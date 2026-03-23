@@ -1,0 +1,21 @@
+[run]
+branch = True
+source =
+    auth
+    db
+    database
+    main
+    models
+    qwen_client
+    qwen_service
+    schemas
+    student_images
+    teacher_images
+
+[report]
+show_missing = True
+skip_empty = True
+omit =
+    tests/*
+    frontend/*
+    alembic/*

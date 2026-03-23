@@ -11,14 +11,15 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from auth import create_access_token, decode_token, hash_password, verify_password
-from database import Base, engine, get_db
+from database import get_db
 from models import AnswerFile, Assignment, Course, GradeResult, Student, Submission, Teacher
 from qwen_service import grade_one_submission, upload_file_to_qwen
+from runtime_config import get_app_data_dir, get_cors_allow_origins, get_frontend_base_url
 from schemas import (
     AnswerFileResponse,
     AssignmentCreate,
@@ -51,9 +52,11 @@ from schemas import (
 )
 
 
-BASE_DIR = Path(__file__).resolve().parent
-SOLUTIONS_DIR = BASE_DIR / "data" / "solutions"
-SUBMISSIONS_DIR = BASE_DIR / "data" / "submissions"
+APP_DATA_DIR = get_app_data_dir()
+SOLUTIONS_DIR = APP_DATA_DIR / "solutions"
+SUBMISSIONS_DIR = APP_DATA_DIR / "submissions"
+TEACHER_CACHE_DIR = APP_DATA_DIR / "teacher"
+STUDENT_TMP_DIR = APP_DATA_DIR / "tmp" / "submissions"
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/teacher/login")
 
@@ -118,82 +121,15 @@ def get_current_student(
     return student
 
 
-def _ensure_auth_columns_and_backfill() -> None:
-    legacy_password = os.getenv("LEGACY_DEFAULT_PASSWORD", "ChangeMe123!")
-    legacy_hash = hash_password(legacy_password)
-
-    with engine.begin() as conn:
-        teacher_cols = {
-            row["name"]
-            # noinspection SqlNoDataSourceInspection
-            for row in conn.exec_driver_sql("PRAGMA table_info(teachers)").mappings().all()
-        }
-        student_cols = {
-            row["name"]
-            # noinspection SqlNoDataSourceInspection
-            for row in conn.exec_driver_sql("PRAGMA table_info(students)").mappings().all()
-        }
-
-        if "password_hash" not in teacher_cols:
-            # noinspection SqlNoDataSourceInspection
-            conn.exec_driver_sql("ALTER TABLE teachers ADD COLUMN password_hash VARCHAR(255)")
-        if "password_hash" not in student_cols:
-            # noinspection SqlNoDataSourceInspection
-            conn.exec_driver_sql("ALTER TABLE students ADD COLUMN password_hash VARCHAR(255)")
-
-        # noinspection SqlNoDataSourceInspection
-        conn.execute(
-            text(
-                "UPDATE teachers SET password_hash = :h "
-                "WHERE password_hash IS NULL OR TRIM(password_hash) = ''"
-            ),
-            {"h": legacy_hash},
-        )
-        # noinspection SqlNoDataSourceInspection
-        conn.execute(
-            text(
-                "UPDATE students SET password_hash = :h "
-                "WHERE password_hash IS NULL OR TRIM(password_hash) = ''"
-            ),
-            {"h": legacy_hash},
-        )
-
-
-def _ensure_assignment_due_date_column() -> None:
-    with engine.begin() as conn:
-        assignment_cols = {
-            row["name"]
-            # noinspection SqlNoDataSourceInspection
-            for row in conn.exec_driver_sql("PRAGMA table_info(assignments)").mappings().all()
-        }
-        if "due_date" not in assignment_cols:
-            # noinspection SqlNoDataSourceInspection
-            conn.exec_driver_sql("ALTER TABLE assignments ADD COLUMN due_date DATETIME")
-
-
-def _ensure_course_join_token_column() -> None:
-    with engine.begin() as conn:
-        course_cols = {
-            row["name"]
-            # noinspection SqlNoDataSourceInspection
-            for row in conn.exec_driver_sql("PRAGMA table_info(courses)").mappings().all()
-        }
-        if "join_token" not in course_cols:
-            # noinspection SqlNoDataSourceInspection
-            conn.exec_driver_sql("ALTER TABLE courses ADD COLUMN join_token TEXT")
-        # noinspection SqlNoDataSourceInspection
-        conn.exec_driver_sql(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_courses_join_token ON courses(join_token)"
-        )
-
-
 def initialize_app() -> None:
-    SOLUTIONS_DIR.mkdir(parents=True, exist_ok=True)
-    SUBMISSIONS_DIR.mkdir(parents=True, exist_ok=True)
-    Base.metadata.create_all(bind=engine)
-    _ensure_auth_columns_and_backfill()
-    _ensure_assignment_due_date_column()
-    _ensure_course_join_token_column()
+    for target_dir in (
+        APP_DATA_DIR,
+        SOLUTIONS_DIR,
+        SUBMISSIONS_DIR,
+        TEACHER_CACHE_DIR,
+        STUDENT_TMP_DIR,
+    ):
+        target_dir.mkdir(parents=True, exist_ok=True)
 
 
 @asynccontextmanager
@@ -210,7 +146,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=get_cors_allow_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -483,10 +419,7 @@ def _generate_unique_join_token(db: Session) -> str:
 
 
 def _build_frontend_join_url(token: str) -> str:
-    frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173").strip()
-    frontend_base = frontend_base.rstrip("/")
-    if not frontend_base:
-        frontend_base = "http://localhost:5173"
+    frontend_base = get_frontend_base_url()
     return f"{frontend_base}/student/join/{token}"
 
 

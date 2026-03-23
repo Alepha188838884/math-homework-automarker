@@ -6,8 +6,15 @@ import { useTeacherAuth } from "./auth/TeacherAuthContext";
 import StudentJoinPage from "./components/StudentJoinPage";
 import StudentLoginPage from "./components/StudentLoginPage";
 import StudentUploadPage from "./components/StudentUploadPage";
-import TeacherDashboard from "./components/TeacherDashboard";
 import TeacherLoginPage from "./components/TeacherLoginPage";
+import TeacherLayout from "./teacher/TeacherLayout";
+import { TeacherWorkspaceProvider } from "./teacher/TeacherWorkspaceContext";
+import TeacherAssignmentsPage from "./teacher/pages/TeacherAssignmentsPage";
+import TeacherCoursesPage from "./teacher/pages/TeacherCoursesPage";
+import TeacherGradingPage from "./teacher/pages/TeacherGradingPage";
+import TeacherSubmissionRecordsPage from "./teacher/pages/TeacherSubmissionRecordsPage";
+import TeacherSubmissionStatusPage from "./teacher/pages/TeacherSubmissionStatusPage";
+import TeacherStudentsPage from "./teacher/pages/TeacherStudentsPage";
 
 const defaultBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
@@ -101,11 +108,22 @@ function App() {
             path="/teacher"
             element={
               <RequireTeacherAuth>
-                <TeacherDashboard />
+                <TeacherWorkspaceProvider>
+                  <TeacherLayout />
+                </TeacherWorkspaceProvider>
               </RequireTeacherAuth>
             }
-          />
-          <Route path="/teacher/dashboard" element={<Navigate to="/teacher" replace />} />
+          >
+            <Route index element={<Navigate to="courses" replace />} />
+            <Route path="dashboard" element={<Navigate to="/teacher/courses" replace />} />
+            <Route path="courses" element={<TeacherCoursesPage />} />
+            <Route path="students" element={<TeacherStudentsPage />} />
+            <Route path="assignments" element={<TeacherAssignmentsPage />} />
+            <Route path="grading" element={<TeacherGradingPage />} />
+            <Route path="submission-status" element={<TeacherSubmissionStatusPage />} />
+            <Route path="submission-records" element={<TeacherSubmissionRecordsPage />} />
+            <Route path="*" element={<Navigate to="/teacher/courses" replace />} />
+          </Route>
 
           <Route path="/student/login" element={<StudentLoginPage />} />
           <Route path="/student/join/:joinToken" element={<StudentJoinPage />} />

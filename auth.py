@@ -11,7 +11,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from jose import JWTError, jwt
-SECRET_KEY = os.getenv("AUTH_SECRET_KEY", "change-this-in-production")
+
+AUTH_SECRET_KEY_ENV = "AUTH_SECRET_KEY"
 ALGORITHM = os.getenv("AUTH_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "720"))
 PBKDF2_SCHEME = "pbkdf2_sha256"
@@ -22,6 +23,18 @@ try:
     import bcrypt  # type: ignore
 except Exception:
     bcrypt = None
+
+
+def _get_auth_secret_key() -> str:
+    secret = os.getenv(AUTH_SECRET_KEY_ENV, "").strip()
+    if not secret:
+        raise RuntimeError(f"Missing {AUTH_SECRET_KEY_ENV}. Please export a real JWT signing key.")
+
+    lowered = secret.lower()
+    if lowered in {"change-this-in-production", "changeme", "replace_me", "your_secret_key"}:
+        raise RuntimeError(f"{AUTH_SECRET_KEY_ENV} is using a placeholder value. Please set a real JWT signing key.")
+
+    return secret
 
 
 def hash_password(plain_password: str) -> str:
@@ -86,12 +99,12 @@ def create_access_token(data: dict[str, Any], expires_delta: timedelta | None = 
         expires_delta if expires_delta is not None else timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(to_encode, _get_auth_secret_key(), algorithm=ALGORITHM)
 
 
 def decode_token(token: str) -> dict[str, Any]:
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, _get_auth_secret_key(), algorithms=[ALGORITHM])
     except JWTError as exc:
         raise ValueError("Invalid or expired token") from exc
     if not isinstance(payload, dict):

@@ -1,19 +1,23 @@
 from __future__ import annotations
 
+import io
 import json
-import mimetypes
 import shutil
 from pathlib import Path
-from typing import Iterator
+from zipfile import BadZipFile
 
 from docx import Document
-from docx.oxml.ns import nsmap, qn
+from docx.opc.exceptions import PackageNotFoundError
+from docx.oxml.ns import qn
+from PIL import Image
+
+from runtime_config import get_app_data_dir
 
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
-BASE_DIR = Path(__file__).resolve().parent
-TEACHER_CACHE_ROOT = BASE_DIR / "data" / "teacher"
+TEACHER_CACHE_ROOT = get_app_data_dir() / "teacher"
 CACHE_META_FILENAME = "source_meta.json"
+CACHE_META_VERSION = "paragraph-run-image-v2"
 
 
 def _list_image_paths(folder: Path) -> list[str]:
@@ -25,41 +29,6 @@ def _list_image_paths(folder: Path) -> list[str]:
         if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
     ]
     return [str(path) for path in sorted(image_paths)]
-
-
-def _guess_extension(content_type: str | None, fallback_name: str | None) -> str:
-    ext = mimetypes.guess_extension(content_type or "")
-    if not ext and fallback_name:
-        ext = Path(fallback_name).suffix.lower()
-
-    if not ext:
-        return ".png"
-
-    ext = ext.lower()
-    if ext in {".jpe", ".jfif"}:
-        return ".jpg"
-    if ext not in IMAGE_SUFFIXES:
-        return ".png"
-    return ext
-
-
-def _extract_embedded_images(document: Document, element: object) -> Iterator[tuple[bytes, str]]:
-    blips = element.xpath(".//a:blip[@r:embed]", namespaces=nsmap)
-    for blip in blips:
-        rel_id = blip.get(qn("r:embed"))
-        if not rel_id:
-            continue
-        image_part = document.part.related_parts.get(rel_id)
-        if image_part is None:
-            continue
-        ext = _guess_extension(
-            getattr(image_part, "content_type", None),
-            str(getattr(image_part, "partname", "")),
-        )
-        blob = getattr(image_part, "blob", None)
-        if not isinstance(blob, (bytes, bytearray)):
-            continue
-        yield bytes(blob), ext
 
 
 def _reset_cache_dirs(question_dir: Path, solution_dir: Path) -> None:
@@ -87,11 +56,17 @@ def _read_cache_meta(meta_path: Path) -> dict[str, str] | None:
         return None
     source_path = raw.get("source_path")
     source_fingerprint = raw.get("source_fingerprint")
-    if not isinstance(source_path, str) or not isinstance(source_fingerprint, str):
+    extractor_version = raw.get("extractor_version")
+    if (
+        not isinstance(source_path, str)
+        or not isinstance(source_fingerprint, str)
+        or not isinstance(extractor_version, str)
+    ):
         return None
     return {
         "source_path": source_path,
         "source_fingerprint": source_fingerprint,
+        "extractor_version": extractor_version,
     }
 
 
@@ -99,8 +74,36 @@ def _write_cache_meta(meta_path: Path, source_path: Path, source_fingerprint: st
     payload = {
         "source_path": str(source_path),
         "source_fingerprint": source_fingerprint,
+        "extractor_version": CACHE_META_VERSION,
     }
     meta_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _iter_run_images(document: Document, paragraph: object):
+    for run in getattr(paragraph, "runs", []):
+        drawings = run.element.xpath(".//w:drawing")
+        if not drawings:
+            continue
+        for drawing in drawings:
+            blips = drawing.xpath(".//a:blip")
+            for blip in blips:
+                rel_id = blip.get(qn("r:embed"))
+                if not rel_id:
+                    continue
+                image_part = document.part.related_parts.get(rel_id)
+                if image_part is None:
+                    continue
+                image_bytes = getattr(image_part, "blob", None)
+                if not isinstance(image_bytes, (bytes, bytearray)):
+                    continue
+                yield bytes(image_bytes)
+
+
+def _save_grayscale_png(image_bytes: bytes, target_path: Path) -> None:
+    with Image.open(io.BytesIO(image_bytes)) as image:
+        grayscale = image.convert("L")
+        grayscale.save(target_path, format="PNG")
+        grayscale.close()
 
 
 def ensure_teacher_images(answer_file_id: int, docx_path: str) -> tuple[list[str], list[str]]:
@@ -134,47 +137,54 @@ def ensure_teacher_images(answer_file_id: int, docx_path: str) -> tuple[list[str
         and cache_meta is not None
         and cache_meta.get("source_path") == str(source_path)
         and cache_meta.get("source_fingerprint") == source_fingerprint
+        and cache_meta.get("extractor_version") == CACHE_META_VERSION
     ):
         return cached_questions, cached_solutions
 
     _reset_cache_dirs(question_dir, solution_dir)
 
-    document = Document(str(source_path))
+    try:
+        document = Document(str(source_path))
+    except (PackageNotFoundError, BadZipFile, ValueError) as exc:
+        shutil.rmtree(teacher_dir, ignore_errors=True)
+        raise RuntimeError("老师答案 Word 文件无效，请检查文件是否为有效且非空的 .docx。") from exc
 
-    seen_solution_divider = False
-    divider_found = False
-    question_index = 0
-    solution_index = 0
+    try:
+        seen_solution_divider = False
+        divider_found = False
+        question_index = 0
+        solution_index = 0
 
-    for child in document.element.body.iterchildren():
-        if child.tag == qn("w:p"):
-            paragraph_text = "".join(node.text or "" for node in child.xpath(".//w:t", namespaces=nsmap)).strip()
-            if paragraph_text.lower() == "solution":
+        for paragraph in document.paragraphs:
+            paragraph_text = paragraph.text.strip().lower()
+            if not seen_solution_divider and "solution" in paragraph_text:
                 seen_solution_divider = True
                 divider_found = True
                 continue
 
-        for image_blob, image_ext in _extract_embedded_images(document, child):
-            if not seen_solution_divider:
-                question_index += 1
-                target_path = question_dir / f"q_{question_index}{image_ext}"
-            else:
-                solution_index += 1
-                target_path = solution_dir / f"s_{solution_index}{image_ext}"
-            target_path.write_bytes(image_blob)
+            for image_bytes in _iter_run_images(document, paragraph):
+                if not seen_solution_divider:
+                    question_index += 1
+                    target_path = question_dir / f"q_{question_index}.png"
+                else:
+                    solution_index += 1
+                    target_path = solution_dir / f"s_{solution_index}.png"
+                _save_grayscale_png(image_bytes, target_path)
 
-    if not divider_found:
-        raise RuntimeError("老师答案 Word 中未找到 'Solution' 分隔行。")
-    if question_index == 0:
-        raise RuntimeError("老师答案 Word 在 Solution 之前未找到题目图片。")
-    if solution_index == 0:
-        raise RuntimeError("老师答案 Word 在 Solution 之后未找到解答图片。")
+        if not divider_found:
+            raise RuntimeError("老师答案 Word 中未找到 'Solution' 分隔行。")
+        if question_index == 0:
+            raise RuntimeError("老师答案 Word 在 Solution 之前未找到题目图片。")
+        if solution_index == 0:
+            raise RuntimeError("老师答案 Word 在 Solution 之后未找到解答图片。")
 
-    questions = _list_image_paths(question_dir)
-    solutions = _list_image_paths(solution_dir)
-    if not questions or not solutions:
-        raise RuntimeError("老师图片提取失败，请检查 Word 文件内容。")
+        questions = _list_image_paths(question_dir)
+        solutions = _list_image_paths(solution_dir)
+        if not questions or not solutions:
+            raise RuntimeError("老师图片提取失败，请检查 Word 文件内容。")
 
-    _write_cache_meta(meta_path, source_path, source_fingerprint)
-
-    return questions, solutions
+        _write_cache_meta(meta_path, source_path, source_fingerprint)
+        return questions, solutions
+    except Exception:
+        shutil.rmtree(teacher_dir, ignore_errors=True)
+        raise

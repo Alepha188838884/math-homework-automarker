@@ -20,6 +20,7 @@ env/
 # Secrets / local config
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 *.p12
@@ -40,8 +41,10 @@ frontend/tsconfig.tsbuildinfo
 
 # Runtime data / uploaded files / generated artifacts
 data/
+.pytest_runtime/
+tmp_probe*_data/
+tmp_probe*.db
 result.json
-app.db
+out.json
 1.pdf
 L1_HW_solution.docx
-

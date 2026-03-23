@@ -10,8 +10,7 @@ from openai import OpenAI
 
 
 DASHSCOPE_BASE_URL = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-# QWEN_LONG_MODEL = os.getenv("QWEN_LONG_MODEL", "qwen-long")
-QWEN_PLUS_MODEL = os.getenv("QWEN_PLUS_MODEL", "qwen-3.5-plus")
+QWEN_PLUS_MODEL = os.getenv("QWEN_PLUS_MODEL", "qwen3.5-plus")
 
 
 def _normalize_api_key(raw_value: str) -> str:
@@ -50,9 +49,16 @@ def get_dashscope_api_key() -> str:
     - DASSCOPE_API_KEY
     - DASHSCOPE_APIKEY
     - QWEN_API_KEY
+    - OPENAI_API_KEY
     """
 
-    candidates = "OPENAI_API_KEY"
+    candidates = (
+        "DASHSCOPE_API_KEY",
+        "DASSCOPE_API_KEY",
+        "DASHSCOPE_APIKEY",
+        "QWEN_API_KEY",
+        "OPENAI_API_KEY",
+    )
     placeholder_sources: list[str] = []
     for name in candidates:
         raw = os.getenv(name)
@@ -72,7 +78,7 @@ def get_dashscope_api_key() -> str:
 
     raise RuntimeError(
         "Missing DashScope API key. Set DASHSCOPE_API_KEY "
-        "(or DASSCOPE_API_KEY / DASHSCOPE_APIKEY / QWEN_API_KEY)."
+        "(or DASSCOPE_API_KEY / DASHSCOPE_APIKEY / QWEN_API_KEY / OPENAI_API_KEY)."
     )
 
 
@@ -154,33 +160,14 @@ def _call_model(
     raise RuntimeError(f"Qwen call failed after retries: {last_exc}")
 
 
-def call_qwen_long(system_prompt: str, user_prompt: str) -> str:
-    """qwen-long path is disabled."""
-
-    # return _call_model(model_name=QWEN_LONG_MODEL, system_prompt=system_prompt, user_prompt=user_prompt)
-    raise RuntimeError("qwen-long 已被注释停用。")
-
-
 def call_qwen_plus(system_prompt: str, user_prompt: str) -> str:
-    """Call qwen-3.5-plus for per-question analysis/reasoning tasks."""
+    """Call qwen3.5-plus for per-question analysis/reasoning tasks."""
 
     return _call_model(model_name=QWEN_PLUS_MODEL, system_prompt=system_prompt, user_prompt=user_prompt)
 
 
-def call_qwen_long_with_files(system_prompt: str, user_prompt: str, system_file_refs: str) -> str:
-    """qwen-long file-ref path is disabled."""
-
-    # return _call_model(
-    #     model_name=QWEN_LONG_MODEL,
-    #     system_prompt=system_prompt,
-    #     user_prompt=user_prompt,
-    #     system_file_refs=system_file_refs,
-    # )
-    raise RuntimeError("qwen-long 已被注释停用。")
-
-
 def call_qwen_plus_with_files(system_prompt: str, user_prompt: str, system_file_refs: str) -> str:
-    """Internal helper for qwen-3.5-plus with file references via fileid://..."""
+    """Internal helper for qwen3.5-plus with file references via fileid://..."""
 
     return _call_model(
         model_name=QWEN_PLUS_MODEL,

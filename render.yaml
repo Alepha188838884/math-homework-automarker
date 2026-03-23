@@ -1,0 +1,34 @@
+services:
+  - type: web
+    runtime: python
+    name: mathhomeworkautomarker-backend
+    plan: starter
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    preDeployCommand: alembic upgrade head
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    disk:
+      name: data
+      mountPath: /var/data/mathhomeworkautomarker
+      sizeGB: 1
+    envVars:
+      - key: APP_DATA_DIR
+        value: /var/data/mathhomeworkautomarker
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mathhomeworkautomarker-db
+          property: connectionString
+      - key: AUTH_SECRET_KEY
+        generateValue: true
+      - key: DASHSCOPE_API_KEY
+        sync: false
+      - key: FRONTEND_BASE_URL
+        sync: false
+      - key: CORS_ALLOW_ORIGINS
+        sync: false
+
+databases:
+  - name: mathhomeworkautomarker-db
+    plan: basic-256mb
+    region: singapore

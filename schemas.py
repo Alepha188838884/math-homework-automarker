@@ -1,8 +1,26 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_serializer, field_validator
+
+
+def normalize_due_date_to_utc_naive(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def serialize_due_date_as_utc_z(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        utc_value = value.replace(tzinfo=timezone.utc)
+    else:
+        utc_value = value.astimezone(timezone.utc)
+    return utc_value.isoformat().replace("+00:00", "Z")
 
 
 class Token(BaseModel):
@@ -117,6 +135,11 @@ class AssignmentCreate(BaseModel):
     due_date: datetime | None = None
     max_score: float | None = None
 
+    @field_validator("due_date")
+    @classmethod
+    def validate_due_date(cls, value: datetime | None) -> datetime | None:
+        return normalize_due_date_to_utc_naive(value)
+
 
 class AnswerFileResponse(BaseModel):
     id: int
@@ -158,6 +181,10 @@ class AssignmentOut(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    @field_serializer("due_date")
+    def serialize_due_date(self, value: datetime | None) -> str | None:
+        return serialize_due_date_as_utc_z(value)
+
 
 class SubmissionOut(BaseModel):
     id: int
@@ -194,6 +221,10 @@ class StudentAssignmentOverview(BaseModel):
     submission_status: str | None
     total_score: float | None
     max_total_score: float | None
+
+    @field_serializer("due_date")
+    def serialize_due_date(self, value: datetime | None) -> str | None:
+        return serialize_due_date_as_utc_z(value)
 
 
 class GradeQuestionItem(BaseModel):

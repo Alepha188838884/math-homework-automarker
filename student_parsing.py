@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-# DEPRECATED: text/spec pipeline retained for rollback; qwen_service now uses vision pipeline.
+# DEPRECATED: legacy text/spec pipeline retained only for rollback; qwen_service now uses vision pipeline.
 
 import json
 import re
@@ -86,13 +86,13 @@ def _ask_qwen_for_label_answer(
     question_text: str,
     pages: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    # qwen-long retrieval disabled; caller will fall back to local candidate search.
+    # Legacy model-assisted retrieval is disabled; caller falls back to local candidate search.
     _ = question_text, pages, parse_json_object, json
     return {"label": label, "found": False, "candidate_answers": []}
 
 
-def locate_answers_with_qwen_long(teacher_spec: dict[str, Any], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Locate student answer snippets by teacher labels using qwen-long.
+def locate_answers_legacy(teacher_spec: dict[str, Any], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Locate student answer snippets by teacher labels using the retired text pipeline.
 
     Output schema:
     [

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import io
 import shutil
 from pathlib import Path
 
 import fitz
+from PIL import Image
+
+from runtime_config import get_app_data_dir
 
 
-BASE_DIR = Path(__file__).resolve().parent
-STUDENT_TMP_ROOT = BASE_DIR / "data" / "tmp" / "submissions"
+STUDENT_TMP_ROOT = get_app_data_dir() / "tmp" / "submissions"
 
 
 def export_student_pdf_to_images(submission_id: int, pdf_path: str) -> list[str]:
@@ -29,18 +32,35 @@ def export_student_pdf_to_images(submission_id: int, pdf_path: str) -> list[str]
         shutil.rmtree(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    image_paths: list[str] = []
-    with fitz.open(str(source_path)) as document:
-        if document.page_count <= 0:
-            raise RuntimeError("学生提交 PDF 没有可导出的页面。")
+    try:
+        document = fitz.open(str(source_path))
+    except Exception as exc:  # noqa: BLE001
+        shutil.rmtree(target_dir, ignore_errors=True)
+        raise RuntimeError("学生提交 PDF 文件无效，请检查文件是否为有效且非空的 PDF。") from exc
 
-        for page_index, page in enumerate(document, start=1):
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0), alpha=False)
-            page_path = target_dir / f"page_{page_index}.png"
-            pixmap.save(str(page_path))
+    image_paths: list[str] = []
+    try:
+        if document.page_count == 0:
+            raise RuntimeError("学生提交 PDF 文件无效，请检查文件是否为有效且非空的 PDF。")
+
+        for page_index in range(document.page_count):
+            page = document.load_page(page_index)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False)
+            page_path = target_dir / f"page_{page_index + 1}.png"
+            image_bytes = pixmap.tobytes("png")
+            with Image.open(io.BytesIO(image_bytes)) as image:
+                grayscale = image.convert("L")
+                grayscale.save(page_path, format="PNG")
+                grayscale.close()
             image_paths.append(str(page_path.resolve()))
+    except Exception as exc:  # noqa: BLE001
+        shutil.rmtree(target_dir, ignore_errors=True)
+        raise RuntimeError("学生提交 PDF 导图失败，请检查文件内容是否完整。") from exc
+    finally:
+        document.close()
 
     if not image_paths:
+        shutil.rmtree(target_dir, ignore_errors=True)
         raise RuntimeError("学生提交 PDF 导图失败，未生成任何页面图片。")
     return image_paths
 

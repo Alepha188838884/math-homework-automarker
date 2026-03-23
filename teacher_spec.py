@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-# DEPRECATED: text/spec pipeline retained for rollback; qwen_service now uses vision pipeline.
+# DEPRECATED: legacy text/spec pipeline retained only for rollback; qwen_service now uses vision pipeline.
 
 import json
 import re
@@ -85,15 +85,15 @@ def extract_raw_blocks_from_docx(path: str) -> list[dict[str, Any]]:
     return blocks
 
 
-def infer_question_structure_with_qwen_long(raw_blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Compatibility wrapper for the old qwen-long structure step.
+def infer_question_structure_legacy(raw_blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Compatibility wrapper for the retired text structure step.
 
     Returns:
         [{"label": "1.a", "raw_block": "...", "page_hint": 1}, ...]
     """
 
     inferred_items: list[dict[str, Any]] = []
-    # qwen-long path disabled; keep local label guessing fallback only.
+    # Legacy model-assisted structure step is disabled; keep local label guessing fallback only.
 
     by_index = {item["index"]: item["label"] for item in inferred_items}
     structured: list[dict[str, Any]] = []
@@ -220,7 +220,7 @@ def generate_teacher_spec(docx_path: str, output_path: str) -> None:
             pass
 
     raw_blocks = extract_raw_blocks_from_docx(str(docx_file))
-    structured_blocks = infer_question_structure_with_qwen_long(raw_blocks)
+    structured_blocks = infer_question_structure_legacy(raw_blocks)
 
     questions: list[dict[str, Any]] = []
     for block in structured_blocks:

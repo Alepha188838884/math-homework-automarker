@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from database import Base
+from db import Base
 
 
 def utcnow() -> datetime:

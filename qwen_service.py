@@ -589,6 +589,11 @@ def grade_one_submission(db: Session, submission_id: int) -> GradeSubmissionResp
     except (RuntimeError, OpenAIError, ValueError, TypeError, OSError) as exc:
         _set_submission_failed(db, submission_obj, "failed_grading", f"视觉评分失败: {exc}")
         raise HTTPException(status_code=502, detail=f"视觉评分失败: {exc}") from exc
+    finally:
+        try:
+            cleanup_student_tmp_images(submission_id_value)
+        except OSError:
+            pass
 
     grade_result = submission_obj.grade_result
     if grade_result is None:
@@ -638,11 +643,6 @@ def grade_one_submission(db: Session, submission_id: int) -> GradeSubmissionResp
     except (SQLAlchemyError, RuntimeError, ValueError, TypeError) as exc:
         _set_submission_failed(db, submission_obj, "failed_grading", f"评分结果入库失败: {exc}")
         raise HTTPException(status_code=500, detail=f"评分结果入库失败: {exc}") from exc
-
-    try:
-        cleanup_student_tmp_images(submission_id_value)
-    except OSError:
-        pass
 
     if response_questions is None:
         raise HTTPException(status_code=500, detail="评分结果缺失，无法生成响应。")
