@@ -1,5 +1,6 @@
 import React from "react";
 import type { Submission } from "../api";
+import { statusLabel } from "../utils";
 
 export interface SubmissionListProps {
   submissions: Submission[];
@@ -9,99 +10,48 @@ export interface SubmissionListProps {
   onViewResult: (submissionId: number) => Promise<void> | void;
 }
 
-function statusColor(status: string): string {
-  if (status === "graded") return "#16a34a";
-  if (status === "needs_manual_review") return "#d97706";
-  if (status === "grading") return "#2563eb";
-  if (status.startsWith("failed")) return "#dc2626";
-  return "#64748b";
+function badgeClass(status: string): string {
+  if (status === "graded") return "badge badge-graded";
+  if (status === "needs_manual_review") return "badge badge-review";
+  if (status === "grading") return "badge badge-grading";
+  if (status.startsWith("failed")) return "badge badge-failed";
+  return "badge badge-uploaded";
 }
 
-function SubmissionList({
-  submissions,
-  gradingIds,
-  viewingIds,
-  onGrade,
-  onViewResult,
-}: SubmissionListProps) {
+function SubmissionList({ submissions, gradingIds, viewingIds, onGrade, onViewResult }: SubmissionListProps) {
   if (submissions.length === 0) {
-    return (
-      <div
-        style={{
-          border: "1px dashed #cbd5e1",
-          borderRadius: "10px",
-          padding: "16px",
-          color: "#64748b",
-          backgroundColor: "#f8fafc",
-        }}
-      >
-        当前作业暂无提交记录（来自后端数据）。
-      </div>
-    );
+    return <div className="empty-state">当前作业暂无提交记录（来自后端数据）。</div>;
   }
 
   return (
-    <div style={{ overflowX: "auto" }}>
-      <table
-        style={{
-          width: "100%",
-          borderCollapse: "collapse",
-          backgroundColor: "#fff",
-          border: "1px solid #e2e8f0",
-          borderRadius: "10px",
-          overflow: "hidden",
-        }}
-      >
-        <thead style={{ backgroundColor: "#f1f5f9" }}>
+    <div className="table-wrap">
+      <table className="data-table">
+        <thead>
           <tr>
-            <th style={thStyle}>Submission ID</th>
-            <th style={thStyle}>Student ID</th>
-            <th style={thStyle}>Filename</th>
-            <th style={thStyle}>Status</th>
-            <th style={thStyle}>Actions</th>
+            <th>提交 ID</th>
+            <th>学生 ID</th>
+            <th>文件名</th>
+            <th>状态</th>
+            <th>操作</th>
           </tr>
         </thead>
         <tbody>
-          {submissions.map((submission) => {
-            const isGrading = gradingIds.has(submission.id);
-            const isViewing = viewingIds.has(submission.id);
-
+          {submissions.map((s) => {
+            const isGrading = gradingIds.has(s.id);
+            const isViewing = viewingIds.has(s.id);
             return (
-              <tr key={submission.id}>
-                <td style={tdStyle}>{submission.id}</td>
-                <td style={tdStyle}>{submission.student_id}</td>
-                <td style={tdStyle}>{submission.original_filename}</td>
-                <td style={tdStyle}>
-                  <span
-                    style={{
-                      padding: "4px 8px",
-                      borderRadius: "999px",
-                      backgroundColor: `${statusColor(submission.status)}20`,
-                      color: statusColor(submission.status),
-                      fontWeight: 600,
-                      fontSize: "0.86rem",
-                    }}
-                  >
-                    {submission.status}
-                  </span>
-                </td>
-                <td style={{ ...tdStyle, minWidth: "240px" }}>
+              <tr key={s.id}>
+                <td>{s.id}</td>
+                <td>{s.student_id}</td>
+                <td>{s.original_filename}</td>
+                <td><span className={badgeClass(s.status)}>{statusLabel(s.status)}</span></td>
+                <td>
                   <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                    <button
-                      type="button"
-                      onClick={() => onGrade(submission.id)}
-                      disabled={isGrading}
-                      style={primaryButtonStyle}
-                    >
-                      {isGrading ? "Grading..." : "Grade this submission"}
+                    <button type="button" onClick={() => onGrade(s.id)} disabled={isGrading} className="btn btn-primary">
+                      {isGrading ? "批改中..." : "批改"}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => onViewResult(submission.id)}
-                      disabled={isViewing}
-                      style={secondaryButtonStyle}
-                    >
-                      {isViewing ? "Loading..." : "View result"}
+                    <button type="button" onClick={() => onViewResult(s.id)} disabled={isViewing} className="btn btn-secondary">
+                      {isViewing ? "加载中..." : "查看结果"}
                     </button>
                   </div>
                 </td>
@@ -113,39 +63,5 @@ function SubmissionList({
     </div>
   );
 }
-
-const thStyle: React.CSSProperties = {
-  textAlign: "left",
-  padding: "12px",
-  fontSize: "0.9rem",
-  color: "#334155",
-  borderBottom: "1px solid #e2e8f0",
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: "12px",
-  borderBottom: "1px solid #e2e8f0",
-  color: "#0f172a",
-  fontSize: "0.95rem",
-  verticalAlign: "top",
-};
-
-const primaryButtonStyle: React.CSSProperties = {
-  border: "none",
-  borderRadius: "8px",
-  padding: "8px 10px",
-  backgroundColor: "#2563eb",
-  color: "#fff",
-  cursor: "pointer",
-};
-
-const secondaryButtonStyle: React.CSSProperties = {
-  border: "1px solid #cbd5e1",
-  borderRadius: "8px",
-  padding: "8px 10px",
-  backgroundColor: "#fff",
-  color: "#0f172a",
-  cursor: "pointer",
-};
 
 export default SubmissionList;

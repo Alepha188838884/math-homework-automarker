@@ -92,12 +92,20 @@ export interface AnswerFileResponse {
   updated_at?: string;
 }
 
+export type SubmissionStatus =
+  | "uploaded"
+  | "failed_upload"
+  | "grading"
+  | "graded"
+  | "needs_manual_review"
+  | "failed_grading";
+
 export interface Submission {
   id: number;
   assignment_id: number;
   student_id: number;
   original_filename: string;
-  status: string;
+  status: SubmissionStatus;
   created_at: string;
   graded_at?: string | null;
   file_path?: string;
@@ -116,7 +124,7 @@ export interface GradeQuestion {
 
 export interface GradeResult {
   submission_id: number;
-  status?: string;
+  status?: SubmissionStatus;
   model_name?: string;
   graded_at?: string | null;
   total_score: number;
@@ -145,7 +153,7 @@ export interface StudentAssignmentStatus {
   student_email: string;
   has_submitted: boolean;
   submission_id: number | null;
-  submission_status: string | null;
+  submission_status: SubmissionStatus | null;
   total_score: number | null;
   max_total_score: number | null;
 }
@@ -159,7 +167,7 @@ export interface StudentAssignmentOverview {
   max_score?: number | null;
   has_submitted: boolean;
   submission_id?: number | null;
-  submission_status?: string | null;
+  submission_status?: SubmissionStatus | null;
   total_score?: number | null;
   max_total_score?: number | null;
 }
@@ -197,10 +205,6 @@ export function getTeacherToken(): string | null {
   return loadTeacherSession<TeacherPublic>()?.token ?? null;
 }
 
-export function getTeacherAccessToken(): string | null {
-  return getTeacherToken();
-}
-
 export function clearTeacherToken(): void {
   clearTeacherSession();
 }
@@ -217,10 +221,6 @@ export function setStudentToken(token: string): void {
 
 export function getStudentToken(): string | null {
   return loadStudentSession<StudentPublic>()?.token ?? null;
-}
-
-export function getStudentAccessToken(): string | null {
-  return getStudentToken();
 }
 
 export function clearStudentToken(): void {
@@ -305,33 +305,51 @@ function buildAuthHeaders(authRole: AuthRole): HeadersInit {
   if (authRole === "none") {
     return {};
   }
-  const token = authRole === "teacher" ? getTeacherAccessToken() : getStudentAccessToken();
+  const token = authRole === "teacher" ? getTeacherToken() : getStudentToken();
   if (!token) {
     return {};
   }
   return { Authorization: `Bearer ${token}` };
 }
 
+const DEFAULT_TIMEOUT_MS = 30_000;
+
 async function requestJson<T>(
   path: string,
   init: RequestInit,
   authRole: AuthRole = "none",
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<T> {
   const mergedHeaders: HeadersInit = {
     ...buildAuthHeaders(authRole),
     ...(init.headers ?? {}),
   };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // Merge with any existing signal from caller
+  const existingSignal = init.signal;
+  if (existingSignal) {
+    existingSignal.addEventListener("abort", () => controller.abort());
+  }
+
   let response: Response;
   try {
     response = await fetch(buildUrl(path), {
       ...init,
       headers: mergedHeaders,
+      signal: controller.signal,
     });
   } catch (error) {
+    if (controller.signal.aborted && !(existingSignal?.aborted)) {
+      throw new Error(`请求超时（${timeoutMs / 1000} 秒），请检查网络连接或稍后重试。`);
+    }
     const reason = error instanceof Error ? error.message : "Network error";
     throw new Error(
       `无法连接后端服务 (${API_BASE_URL})，请检查后端是否已启动或 CORS/端口是否匹配。原始错误: ${reason}`,
     );
+  } finally {
+    clearTimeout(timer);
   }
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
@@ -607,6 +625,7 @@ export async function uploadSolution(
       body: formData,
     },
     "teacher",
+    120_000,
   );
 }
 
@@ -626,6 +645,7 @@ export async function uploadSubmission(
       body: formData,
     },
     "teacher",
+    120_000,
   );
 }
 
@@ -642,6 +662,7 @@ export async function uploadSubmissionForMe(
       body: formData,
     },
     "student",
+    120_000,
   );
 }
 
@@ -664,6 +685,7 @@ export async function gradeSubmission(
       method: "POST",
     },
     "teacher",
+    120_000,
   );
 }
 
@@ -676,6 +698,7 @@ export async function gradeAllSubmissions(
       method: "POST",
     },
     "teacher",
+    300_000,
   );
 }
 

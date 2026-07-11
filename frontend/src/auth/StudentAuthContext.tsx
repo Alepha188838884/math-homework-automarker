@@ -55,7 +55,7 @@ export const StudentAuthProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setExpiresAt(restored.expiresAt);
     setStudent(restored.profile);
     setReady(true);
-  }, [logoutStudent]);
+  }, []);
 
   useEffect(() => {
     restoreStudentSession();

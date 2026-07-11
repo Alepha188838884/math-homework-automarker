@@ -54,7 +54,7 @@ export const TeacherAuthProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setExpiresAt(restored.expiresAt);
     setTeacher(restored.profile);
     setReady(true);
-  }, [logoutTeacher]);
+  }, []);
 
   useEffect(() => {
     restoreTeacherSession();

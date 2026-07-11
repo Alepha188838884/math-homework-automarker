@@ -7,20 +7,6 @@ export interface FileUploadAreaProps {
   label: string;
 }
 
-const baseDropzoneStyle: React.CSSProperties = {
-  border: "2px dashed #94a3b8",
-  borderRadius: "12px",
-  padding: "20px",
-  backgroundColor: "#f8fafc",
-  cursor: "pointer",
-  transition: "all 0.2s ease",
-};
-
-const activeDropzoneStyle: React.CSSProperties = {
-  borderColor: "#2563eb",
-  backgroundColor: "#eff6ff",
-};
-
 function FileUploadArea({
   accept,
   multiple = false,
@@ -46,20 +32,15 @@ function FileUploadArea({
     event.preventDefault();
     event.stopPropagation();
     setIsDragOver(false);
-
     const files = Array.from(event.dataTransfer.files ?? []);
-    if (files.length === 0) {
-      return;
-    }
+    if (files.length === 0) return;
     setFiles(files);
   };
 
   const clearSelection = () => {
     setSelectedFiles([]);
     onFilesSelected([]);
-    if (inputRef.current) {
-      inputRef.current.value = "";
-    }
+    if (inputRef.current) inputRef.current.value = "";
   };
 
   return (
@@ -74,53 +55,36 @@ function FileUploadArea({
       />
 
       <div
-        style={{
-          ...baseDropzoneStyle,
-          ...(isDragOver ? activeDropzoneStyle : {}),
-        }}
+        className={`dropzone${isDragOver ? " drag-active" : ""}`}
         onClick={() => inputRef.current?.click()}
-        onDragOver={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          setIsDragOver(true);
-        }}
-        onDragLeave={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          setIsDragOver(false);
-        }}
+        onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); }}
+        onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); }}
         onDrop={handleDrop}
         role="button"
         tabIndex={0}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
             inputRef.current?.click();
           }
         }}
       >
-        <div style={{ fontWeight: 600, color: "#0f172a" }}>{label}</div>
-        <div style={{ color: "#475569", marginTop: "6px" }}>
-          Drag & drop files here, or click to browse.
-        </div>
-        <div style={{ color: "#64748b", fontSize: "0.9rem", marginTop: "4px" }}>
-          Accepted: {accept}
+        <div className="dropzone-label">{label}</div>
+        <div className="dropzone-hint">拖拽文件到此处，或点击选择文件</div>
+        <div className="dropzone-accept">
+          支持格式：
+          {accept
+            .split(",")
+            .map((part) => part.trim())
+            .filter((part) => part.startsWith("."))
+            .join("、") || accept}
         </div>
       </div>
 
       {selectedFiles.length > 0 && (
-        <div
-          style={{
-            border: "1px solid #e2e8f0",
-            borderRadius: "10px",
-            padding: "10px 12px",
-            backgroundColor: "#ffffff",
-          }}
-        >
-          <div style={{ fontWeight: 600, marginBottom: "6px", color: "#0f172a" }}>
-            Selected files
-          </div>
-          <ul style={{ margin: 0, paddingLeft: "20px", color: "#334155" }}>
+        <div className="file-list">
+          <div className="file-list-title">已选择文件</div>
+          <ul style={{ margin: 0, paddingLeft: "20px", color: "var(--text)" }}>
             {selectedFiles.map((file) => (
               <li key={`${file.name}-${file.lastModified}`}>{file.name}</li>
             ))}
@@ -128,16 +92,10 @@ function FileUploadArea({
           <button
             type="button"
             onClick={clearSelection}
-            style={{
-              marginTop: "10px",
-              border: "1px solid #cbd5e1",
-              background: "#fff",
-              padding: "6px 10px",
-              borderRadius: "8px",
-              cursor: "pointer",
-            }}
+            className="btn btn-secondary"
+            style={{ marginTop: "10px" }}
           >
-            Clear
+            清除
           </button>
         </div>
       )}

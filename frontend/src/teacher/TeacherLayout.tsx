@@ -1,28 +1,7 @@
 import React from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useTeacherAuth } from "../auth/TeacherAuthContext";
-import {
-  buttonSecondaryStyle,
-  contentShellStyle,
-  contextHintStyle,
-  fieldStyle,
-  inputStyle,
-  labelTextStyle,
-  layoutHeadingStyle,
-  layoutShellStyle,
-  layoutSubHeadingStyle,
-  layoutTopBarStyle,
-  layoutTopCardStyle,
-  navLinkStyle,
-  navListStyle,
-  selectorsGridStyle,
-  sidebarHintStyle,
-  sidebarStyle,
-  sidebarTitleStyle,
-  topActionsStyle,
-} from "./styles";
 import { useTeacherWorkspace } from "./TeacherWorkspaceContext";
-
 
 const navItems = [
   { to: "/teacher/courses", label: "班级管理" },
@@ -37,106 +16,80 @@ function TeacherLayout() {
   const navigate = useNavigate();
   const { teacher, logoutTeacher } = useTeacherAuth();
   const {
-    courses,
-    selectedCourseId,
-    selectedAssignmentId,
-    courseAssignments,
-    isLoadingAssignments,
-    setSelectedCourseId,
-    setSelectedAssignmentId,
+    courses, selectedCourseId, selectedAssignmentId,
+    courseAssignments, isLoadingAssignments,
+    setSelectedCourseId, setSelectedAssignmentId,
   } = useTeacherWorkspace();
 
   return (
-    <div style={layoutShellStyle}>
-      <aside style={sidebarStyle}>
-        <h2 style={sidebarTitleStyle}>教师后台</h2>
-        <p style={sidebarHintStyle}>使用左侧导航切换班级、学生、作业、批改、提交状态和提交记录。</p>
+    <div className="layout-shell">
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <div className="sidebar-icon">数</div>
+          <h2 className="sidebar-title">教师后台</h2>
+        </div>
+        <p className="sidebar-hint">管理班级、学生、作业与批改</p>
 
-        <nav style={navListStyle} aria-label="教师后台导航">
+        <nav className="nav-list" aria-label="教师后台导航">
           {navItems.map((item) => (
-            <NavLink key={item.to} to={item.to} style={({ isActive }) => navLinkStyle(isActive)}>
+            <NavLink key={item.to} to={item.to} className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
               {item.label}
             </NavLink>
           ))}
         </nav>
       </aside>
 
-      <div style={contentShellStyle}>
-        <section style={layoutTopCardStyle}>
-          <div style={layoutTopBarStyle}>
+      <div className="content-shell">
+        <section className="workspace-bar">
+          <div className="workspace-header">
             <div>
-              <h2 style={layoutHeadingStyle}>教师工作台</h2>
-              <p style={layoutSubHeadingStyle}>
-                {teacher ? `${teacher.name} (${teacher.email})` : "Unknown teacher"}
-              </p>
+              <h2 className="workspace-title">教师工作台</h2>
+              <p className="workspace-subtitle">{teacher ? `${teacher.name}（${teacher.email}）` : "未知教师"}</p>
             </div>
-
-            <div style={topActionsStyle}>
-              <button
-                type="button"
-                style={buttonSecondaryStyle}
-                onClick={() => {
-                  logoutTeacher();
-                  navigate("/teacher/login", { replace: true });
-                }}
-              >
+            <div className="workspace-actions">
+              <button type="button" className="btn btn-secondary" onClick={() => { logoutTeacher(); navigate("/teacher/login", { replace: true }); }}>
                 退出登录
               </button>
             </div>
           </div>
 
-          <div style={selectorsGridStyle}>
-            <label style={fieldStyle}>
-              <span style={labelTextStyle}>当前班级</span>
+          <div className="selector-grid">
+            <label className="form-group">
+              <span className="form-label">当前班级</span>
               <select
-                style={inputStyle}
+                className="form-input"
                 value={selectedCourseId ?? ""}
-                onChange={(event) => {
-                  const value = Number(event.target.value);
-                  setSelectedCourseId(Number.isFinite(value) && value > 0 ? value : null);
-                }}
+                onChange={(e) => { const v = Number(e.target.value); setSelectedCourseId(Number.isFinite(v) && v > 0 ? v : null); }}
                 disabled={courses.length === 0}
               >
                 {courses.length === 0 ? (
                   <option value="">暂无班级</option>
-                ) : (
-                  courses.map((course) => (
-                    <option key={course.id} value={course.id}>
-                      #{course.id} - {course.name}
-                    </option>
-                  ))
-                )}
+                ) : courses.map((c) => (
+                  <option key={c.id} value={c.id}>#{c.id} - {c.name}</option>
+                ))}
               </select>
             </label>
-
-            <label style={fieldStyle}>
-              <span style={labelTextStyle}>当前作业</span>
+            <label className="form-group">
+              <span className="form-label">当前作业</span>
               <select
-                style={inputStyle}
+                className="form-input"
                 value={selectedAssignmentId ?? ""}
-                onChange={(event) => {
-                  const value = Number(event.target.value);
-                  setSelectedAssignmentId(Number.isFinite(value) && value > 0 ? value : null);
-                }}
+                onChange={(e) => { const v = Number(e.target.value); setSelectedAssignmentId(Number.isFinite(v) && v > 0 ? v : null); }}
                 disabled={selectedCourseId === null || isLoadingAssignments || courseAssignments.length === 0}
               >
                 {selectedCourseId === null ? (
                   <option value="">请先选择班级</option>
                 ) : courseAssignments.length === 0 ? (
                   <option value="">{isLoadingAssignments ? "加载中..." : "暂无作业"}</option>
-                ) : (
-                  courseAssignments.map((assignment) => (
-                    <option key={assignment.id} value={assignment.id}>
-                      #{assignment.id} - {assignment.title}
-                    </option>
-                  ))
-                )}
+                ) : courseAssignments.map((a) => (
+                  <option key={a.id} value={a.id}>#{a.id} - {a.title}</option>
+                ))}
               </select>
             </label>
           </div>
 
-          <p style={{ ...contextHintStyle, marginTop: "12px" }}>
-            页面切换时会保留当前 Backend Base URL、班级选择和作业选择。
+          <p className="context-hint" style={{ marginTop: "12px" }}>
+            页面切换时会保留当前后端地址、班级选择和作业选择。
           </p>
         </section>
 

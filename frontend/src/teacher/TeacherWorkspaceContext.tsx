@@ -26,7 +26,7 @@ import {
   setBaseUrl,
   uploadSolution,
 } from "../api";
-import { getErrorMessage, type StatusMessage } from "./utils";
+import { getErrorMessage, type StatusMessage } from "../utils";
 
 
 const defaultBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
@@ -339,7 +339,7 @@ export const TeacherWorkspaceProvider: React.FC<{ children: React.ReactNode }> =
       const message = getErrorMessage(error);
       setActionMessage({
         type: "error",
-        text: message.includes("HTTP 404") ? "No grading result yet for this submission." : message,
+        text: message.includes("HTTP 404") ? "该提交暂无批改结果。" : message,
       });
     } finally {
       setViewingIds((prev) => {

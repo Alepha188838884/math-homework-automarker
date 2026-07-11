@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { setBaseUrl } from "./api";
 import { useStudentAuth } from "./auth/StudentAuthContext";
 import { useTeacherAuth } from "./auth/TeacherAuthContext";
+import ErrorBoundary from "./components/ErrorBoundary";
 import StudentJoinPage from "./components/StudentJoinPage";
 import StudentLoginPage from "./components/StudentLoginPage";
 import StudentUploadPage from "./components/StudentUploadPage";
@@ -18,71 +19,39 @@ import TeacherStudentsPage from "./teacher/pages/TeacherStudentsPage";
 
 const defaultBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
-const pageStyle: React.CSSProperties = {
-  minHeight: "100vh",
-  background:
-    "radial-gradient(circle at top left, #f0f9ff 0%, #f8fafc 40%, #eef2ff 100%)",
-  padding: "28px 16px",
-  boxSizing: "border-box",
-};
-
-const containerStyle: React.CSSProperties = {
-  maxWidth: "1200px",
-  margin: "0 auto",
-};
-
-const topBarStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: "12px",
-  marginBottom: "16px",
-  flexWrap: "wrap",
-};
-
-const titleStyle: React.CSSProperties = {
-  margin: 0,
-  fontSize: "1.55rem",
-  color: "#0f172a",
-};
-
-const subtitleStyle: React.CSSProperties = {
-  margin: "6px 0 0",
-  color: "#475569",
-  fontSize: "0.95rem",
-};
-
-const loadingBoxStyle: React.CSSProperties = {
-  backgroundColor: "#ffffff",
-  border: "1px solid #e2e8f0",
-  borderRadius: "12px",
-  padding: "14px 16px",
-  color: "#334155",
-  fontSize: "0.94rem",
-};
-
 const RequireTeacherAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { ready, isAuthenticated } = useTeacherAuth();
-  if (!ready) {
-    return <div style={loadingBoxStyle}>正在恢复教师会话...</div>;
-  }
-  if (!isAuthenticated) {
-    return <Navigate to="/teacher/login" replace />;
-  }
+  if (!ready) return <div className="loading-box">正在恢复教师会话...</div>;
+  if (!isAuthenticated) return <Navigate to="/teacher/login" replace />;
   return <>{children}</>;
 };
 
 const RequireStudentAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { ready, isAuthenticated } = useStudentAuth();
   const location = useLocation();
-  if (!ready) {
-    return <div style={loadingBoxStyle}>正在恢复学生会话...</div>;
-  }
-  if (!isAuthenticated) {
-    return <Navigate to={`/student/login${location.search}`} replace />;
-  }
+  if (!ready) return <div className="loading-box">正在恢复学生会话...</div>;
+  if (!isAuthenticated) return <Navigate to={`/student/login${location.search}`} replace />;
   return <>{children}</>;
 };
+
+function AppHeader() {
+  const location = useLocation();
+  const isTeacherDashboard = location.pathname.startsWith("/teacher") &&
+    !location.pathname.includes("/login");
+
+  if (isTeacherDashboard) return null;
+
+  return (
+    <header className="page-header">
+      <div>
+        <h1 className="page-title">数学作业自动批改系统</h1>
+        <p className="page-subtitle">
+          通用数学作业批改平台：老师管理班级与作业，学生登录后提交 PDF。
+        </p>
+      </div>
+    </header>
+  );
+}
 
 function App() {
   useEffect(() => {
@@ -90,55 +59,48 @@ function App() {
   }, []);
 
   return (
-    <div style={pageStyle}>
-      <div style={containerStyle}>
-        <header style={topBarStyle}>
-          <div>
-            <h1 style={titleStyle}>Math Homework Auto-Grading</h1>
-            <p style={subtitleStyle}>
-              通用数学作业批改平台：老师管理班级与作业，学生登录后提交 PDF。
-            </p>
-          </div>
-        </header>
+    <div className="page-bg">
+      <div className="page-container">
+        <AppHeader />
+        <ErrorBoundary>
+          <Routes>
+            <Route path="/" element={<Navigate to="/teacher/login" replace />} />
+            <Route path="/teacher/login" element={<TeacherLoginPage />} />
+            <Route
+              path="/teacher"
+              element={
+                <RequireTeacherAuth>
+                  <TeacherWorkspaceProvider>
+                    <TeacherLayout />
+                  </TeacherWorkspaceProvider>
+                </RequireTeacherAuth>
+              }
+            >
+              <Route index element={<Navigate to="courses" replace />} />
+              <Route path="dashboard" element={<Navigate to="/teacher/courses" replace />} />
+              <Route path="courses" element={<TeacherCoursesPage />} />
+              <Route path="students" element={<TeacherStudentsPage />} />
+              <Route path="assignments" element={<TeacherAssignmentsPage />} />
+              <Route path="grading" element={<TeacherGradingPage />} />
+              <Route path="submission-status" element={<TeacherSubmissionStatusPage />} />
+              <Route path="submission-records" element={<TeacherSubmissionRecordsPage />} />
+              <Route path="*" element={<Navigate to="/teacher/courses" replace />} />
+            </Route>
 
-        <Routes>
-          <Route path="/" element={<Navigate to="/teacher/login" replace />} />
-          <Route path="/teacher/login" element={<TeacherLoginPage />} />
-          <Route
-            path="/teacher"
-            element={
-              <RequireTeacherAuth>
-                <TeacherWorkspaceProvider>
-                  <TeacherLayout />
-                </TeacherWorkspaceProvider>
-              </RequireTeacherAuth>
-            }
-          >
-            <Route index element={<Navigate to="courses" replace />} />
-            <Route path="dashboard" element={<Navigate to="/teacher/courses" replace />} />
-            <Route path="courses" element={<TeacherCoursesPage />} />
-            <Route path="students" element={<TeacherStudentsPage />} />
-            <Route path="assignments" element={<TeacherAssignmentsPage />} />
-            <Route path="grading" element={<TeacherGradingPage />} />
-            <Route path="submission-status" element={<TeacherSubmissionStatusPage />} />
-            <Route path="submission-records" element={<TeacherSubmissionRecordsPage />} />
-            <Route path="*" element={<Navigate to="/teacher/courses" replace />} />
-          </Route>
-
-          <Route path="/student/login" element={<StudentLoginPage />} />
-          <Route path="/student/join/:joinToken" element={<StudentJoinPage />} />
-          <Route
-            path="/student"
-            element={
-              <RequireStudentAuth>
-                <StudentUploadPage />
-              </RequireStudentAuth>
-            }
-          />
-          <Route path="/student/home" element={<Navigate to="/student" replace />} />
-
-          <Route path="*" element={<Navigate to="/teacher/login" replace />} />
-        </Routes>
+            <Route path="/student/login" element={<StudentLoginPage />} />
+            <Route path="/student/join/:joinToken" element={<StudentJoinPage />} />
+            <Route
+              path="/student"
+              element={
+                <RequireStudentAuth>
+                  <StudentUploadPage />
+                </RequireStudentAuth>
+              }
+            />
+            <Route path="/student/home" element={<Navigate to="/student" replace />} />
+            <Route path="*" element={<Navigate to="/teacher/login" replace />} />
+          </Routes>
+        </ErrorBoundary>
       </div>
     </div>
   );

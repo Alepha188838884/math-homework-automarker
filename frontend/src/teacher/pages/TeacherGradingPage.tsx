@@ -1,145 +1,65 @@
 import React, { useState } from "react";
 import FileUploadArea from "../../components/FileUploadArea";
-import {
-  alertBaseStyle,
-  buttonPrimaryStyle,
-  buttonSecondaryStyle,
-  cardStyle,
-  debugInfoStyle,
-  emptyBoxStyle,
-  messageStyle,
-  pageStackStyle,
-  sectionTitleStyle,
-  summaryGridStyle,
-  summaryPanelStyle,
-} from "../styles";
 import { useTeacherWorkspace } from "../TeacherWorkspaceContext";
-import { getFailureReason, isDocxFile } from "../utils";
-
+import { formatDateTime, getFailureReason, isDocxFile } from "../../utils";
 
 function TeacherGradingPage() {
   const {
-    selectedAssignmentId,
-    latestSolution,
-    gradeAllSummary,
-    solutionMessage,
-    actionMessage,
-    isUploadingSolution,
-    isGradingAll,
-    uploadSolutionFile,
-    gradeAllSelectedAssignment,
+    selectedAssignmentId, latestSolution, gradeAllSummary,
+    solutionMessage, actionMessage, isUploadingSolution, isGradingAll,
+    uploadSolutionFile, gradeAllSelectedAssignment,
   } = useTeacherWorkspace();
 
   const [solutionFiles, setSolutionFiles] = useState<File[]>([]);
-  const [solutionAreaKey, setSolutionAreaKey] = useState<number>(0);
+  const [solutionAreaKey, setSolutionAreaKey] = useState(0);
 
   const handleUploadSolution = async () => {
-    if (selectedAssignmentId === null) {
-      return;
-    }
-    if (solutionFiles.length === 0) {
-      return;
-    }
-    const file = solutionFiles[0];
-    if (!isDocxFile(file)) {
-      return;
-    }
+    if (selectedAssignmentId === null || solutionFiles.length === 0) return;
+    if (!isDocxFile(solutionFiles[0])) return;
     try {
-      await uploadSolutionFile(file);
+      await uploadSolutionFile(solutionFiles[0]);
       setSolutionFiles([]);
-      setSolutionAreaKey((value) => value + 1);
-    } catch {
-    }
+      setSolutionAreaKey((v) => v + 1);
+    } catch { /* Error displayed via solutionMessage */ }
   };
 
   return (
-    <div style={pageStackStyle}>
-      <section style={cardStyle}>
-        <h2 style={sectionTitleStyle}>批改中心</h2>
-        <FileUploadArea
-          key={`solution-area-${solutionAreaKey}`}
-          label="Official solution DOCX"
-          accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          multiple={false}
-          onFilesSelected={setSolutionFiles}
-        />
-        <div style={{ marginTop: "12px", display: "flex", gap: "10px", flexWrap: "wrap" }}>
-          <button
-            type="button"
-            onClick={() => void handleUploadSolution()}
-            disabled={
-              isUploadingSolution ||
-              selectedAssignmentId === null ||
-              solutionFiles.length === 0 ||
-              !isDocxFile(solutionFiles[0])
-            }
-            style={buttonPrimaryStyle}
-          >
-            {isUploadingSolution ? "Uploading..." : "Upload Solution"}
+    <div className="page-stack">
+      <section className="card">
+        <h2 className="section-title">批改中心</h2>
+        <FileUploadArea key={`solution-area-${solutionAreaKey}`} label="官方答案 DOCX 文件" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple={false} onFilesSelected={setSolutionFiles} />
+        <div style={{ marginTop: "14px", display: "flex", gap: "10px", flexWrap: "wrap" }}>
+          <button type="button" onClick={() => void handleUploadSolution()} disabled={isUploadingSolution || selectedAssignmentId === null || solutionFiles.length === 0 || !isDocxFile(solutionFiles[0])} className="btn btn-primary">
+            {isUploadingSolution ? "上传中..." : "上传官方答案"}
           </button>
-          <button
-            type="button"
-            onClick={() => void gradeAllSelectedAssignment()}
-            disabled={isGradingAll || selectedAssignmentId === null}
-            style={buttonSecondaryStyle}
-          >
-            {isGradingAll ? "Grading all..." : "Grade all submissions"}
+          <button type="button" onClick={() => void gradeAllSelectedAssignment()} disabled={isGradingAll || selectedAssignmentId === null} className="btn btn-secondary">
+            {isGradingAll ? "批量批改中..." : "批量批改全部提交"}
           </button>
         </div>
 
-        {selectedAssignmentId === null && (
-          <div style={emptyBoxStyle}>请先在顶部选择作业后再上传官方答案或发起批改。</div>
-        )}
-        {solutionFiles.length > 0 && !isDocxFile(solutionFiles[0]) && (
-          <div style={{ ...alertBaseStyle, ...messageStyle("error") }}>
-            官方答案必须是 .docx 文件。
-          </div>
-        )}
-        {solutionMessage && (
-          <div style={{ ...alertBaseStyle, ...messageStyle(solutionMessage.type) }}>
-            {solutionMessage.text}
-          </div>
-        )}
-        {actionMessage && (
-          <div style={{ ...alertBaseStyle, ...messageStyle(actionMessage.type) }}>
-            {actionMessage.text}
-          </div>
-        )}
+        {selectedAssignmentId === null && <div className="empty-state" style={{ marginTop: "14px" }}>请先在顶部选择作业后再上传官方答案或发起批改。</div>}
+        {solutionFiles.length > 0 && !isDocxFile(solutionFiles[0]) && <div className="alert alert-error" style={{ marginTop: "12px" }}>官方答案必须是 .docx 文件。</div>}
+        {solutionMessage && <div className={`alert alert-${solutionMessage.type}`} style={{ marginTop: "12px" }}>{solutionMessage.text}</div>}
+        {actionMessage && <div className={`alert alert-${actionMessage.type}`} style={{ marginTop: "12px" }}>{actionMessage.text}</div>}
         {latestSolution && (
-          <div style={debugInfoStyle}>
-            <div>
-              <strong>Latest qwen_file_id:</strong> {latestSolution.qwen_file_id}
-            </div>
-            <div>
-              <strong>Uploaded at:</strong> {latestSolution.uploaded_at}
-            </div>
+          <div className="debug-info">
+            <div><strong>答案文件 ID：</strong> {latestSolution.qwen_file_id}</div>
+            <div><strong>上传时间：</strong> {formatDateTime(latestSolution.uploaded_at)}</div>
           </div>
         )}
         {gradeAllSummary && (
-          <div style={summaryPanelStyle}>
-            <div style={summaryGridStyle}>
-              <div>
-                <strong>Total:</strong> {gradeAllSummary.total}
-              </div>
-              <div>
-                <strong>Graded:</strong> {gradeAllSummary.graded}
-              </div>
-              <div>
-                <strong>Failed:</strong> {gradeAllSummary.failed}
-              </div>
-              <div>
-                <strong>Skipped:</strong> {gradeAllSummary.skipped}
-              </div>
+          <div className="summary-panel">
+            <div className="summary-grid">
+              <div><strong>总计:</strong> {gradeAllSummary.total}</div>
+              <div><strong>已批改:</strong> {gradeAllSummary.graded}</div>
+              <div><strong>失败:</strong> {gradeAllSummary.failed}</div>
+              <div><strong>跳过:</strong> {gradeAllSummary.skipped}</div>
             </div>
             {gradeAllSummary.failures.length > 0 && (
               <div style={{ marginTop: "10px" }}>
-                <strong>Failures:</strong>
+                <strong>失败详情:</strong>
                 <ul style={{ margin: "8px 0 0", paddingLeft: "20px" }}>
-                  {gradeAllSummary.failures.map((failure) => (
-                    <li key={`failure-${failure.submission_id}`}>
-                      #{failure.submission_id}: {getFailureReason(failure)}
-                    </li>
-                  ))}
+                  {gradeAllSummary.failures.map((f) => <li key={f.submission_id}>#{f.submission_id}: {getFailureReason(f)}</li>)}
                 </ul>
               </div>
             )}
