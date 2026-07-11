@@ -77,6 +77,25 @@
 - scratchpad（/private/tmp 下会话目录）会被系统清空——测试数据（sqlite）、node_modules、截图都是易失的，重要产物要放项目目录。
 - macOS TCC「桌面文件夹」授权会话中途失效过一次（全工具 EPERM 读已有文件、新建文件反而可以），用户重启终端后恢复。
 
+## 2026-07-12 夜间自动批次（用户批准 commit 权限与豆包额度后无人值守执行）
+
+### 完成
+- **分组提交积压工作区**（33 文件 → 4 个 commit：b8bf1bb 后端+验证脚本、786a900 前端重构+中文化+UI、aa2fefb 文档、5c21adb 遗留修复+E2E 基建）。`.claude/` 不入库。
+- **豆包批改核对材料**：重跑 validate_providers.py（19/19 判对，33.78s），生成 `review-doubao.html`（项目根，2.8MB）——左侧学生原卷/标准答案图，右侧逐题判分表+人工核对打勾栏。**用户早上打开即可完成主线 gate 的人工核对。**
+- **遗留修复**（verifier 复核通过）：React Router v7 future flags（警告 84→0）、教师登录按钮「登录 / 注册」、教师工作台轮询在 document.hidden 时暂停+恢复可见立即刷新。
+- **E2E 冒烟入 repo**：`frontend/e2e/e2e.mjs`（npm run test:e2e），16 项断言，覆盖路由加载/状态中文化/320+375 溢出回归/sticky 可点性/console 干净。playwright 已入 devDependencies。
+- 后端 pytest 61 passed 无回归。
+
+### 已验证事实 / 教训
+- 后端 `/auth/*` 有 10 次/60s 的 IP 限流（main.py:609 `_auth_limiter`）——E2E 每次 UI 登录都计数，重复运行必须复用 Playwright storageState（现每 run 仅 3 次 auth）。
+- React Router future flag 警告走 console.warn 而非 error——console 断言必须监听 warning 流,否则是空转的假安全网（verifier 用受控回退证明了现断言有真实检出能力）。
+- `validate_results_night.json`、`review-doubao.html` 留在工作区未提交（一次性验证产物,用户处理后可删）。
+
+### 用户验收清单（早上）
+1. 打开 `review-doubao.html` 人工核对豆包判分（主线 gate,约 5-10 分钟）
+2. `git log` 查看 4 个 commit,确认分组合理（未 push,可随意 reset/amend）
+3. 核对通过 → 主线进入第二步 grading_provider 重构
+
 ### 规则 / 约定
 
 - 代码编写委托给 Sonnet 子代理（general-purpose + model: sonnet，串行），主会话只做规格、审查、验证、文档。maker-verifier 分离：写完必须由另一个独立子代理对照规格审查。
