@@ -48,3 +48,7 @@ result.json
 out.json
 1.pdf
 L1_HW_solution.docx
+
+# E2E artifacts
+frontend/e2e/screenshots/
+frontend/e2e/last-run.json

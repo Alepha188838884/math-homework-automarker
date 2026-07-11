@@ -433,9 +433,17 @@ export const TeacherWorkspaceProvider: React.FC<{ children: React.ReactNode }> =
     }
     void loadAssignmentData(selectedAssignmentIdState);
     const timer = window.setInterval(() => {
+      if (document.hidden) return;
       void loadAssignmentData(selectedAssignmentIdState);
     }, 10000);
-    return () => window.clearInterval(timer);
+    const onVisible = () => {
+      if (!document.hidden) void loadAssignmentData(selectedAssignmentIdState);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [clearGradingState, loadAssignmentData, selectedAssignmentIdState]);
 
   const value = useMemo<TeacherWorkspaceContextValue>(

@@ -56,7 +56,7 @@ function TeacherLoginPage() {
           <span>记住登录</span>
         </label>
         <button type="submit" disabled={isLoading} className="btn btn-primary">
-          {isLoading ? "登录中..." : "登录"}
+          {isLoading ? "登录中..." : "登录 / 注册"}
         </button>
         {message && <div className="alert alert-error">{message}</div>}
       </form>
