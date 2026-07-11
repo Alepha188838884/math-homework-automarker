@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import shutil
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from runtime_config import get_app_data_dir
 
 
 STUDENT_TMP_ROOT = get_app_data_dir() / "tmp" / "submissions"
+FORCE_GRAYSCALE = os.getenv("IMAGE_FORCE_GRAYSCALE", "").lower() in ("1", "true", "yes")
 
 
 def export_student_pdf_to_images(submission_id: int, pdf_path: str) -> list[str]:
@@ -49,9 +51,8 @@ def export_student_pdf_to_images(submission_id: int, pdf_path: str) -> list[str]
             page_path = target_dir / f"page_{page_index + 1}.png"
             image_bytes = pixmap.tobytes("png")
             with Image.open(io.BytesIO(image_bytes)) as image:
-                grayscale = image.convert("L")
-                grayscale.save(page_path, format="PNG")
-                grayscale.close()
+                converted = image.convert("L" if FORCE_GRAYSCALE else "RGB")
+                converted.save(page_path, format="PNG")
             image_paths.append(str(page_path.resolve()))
     except Exception as exc:  # noqa: BLE001
         shutil.rmtree(target_dir, ignore_errors=True)

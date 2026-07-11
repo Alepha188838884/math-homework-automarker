@@ -32,6 +32,33 @@ from db import Base, SessionLocal, engine
 engine.echo = False
 
 
+def _make_minimal_pdf() -> bytes:
+    """Generate a minimal valid single-page PDF in memory."""
+    import fitz
+    import io
+    doc = fitz.open()
+    doc.new_page()
+    buf = io.BytesIO()
+    doc.save(buf)
+    doc.close()
+    return buf.getvalue()
+
+
+def _make_minimal_docx() -> bytes:
+    """Generate a minimal valid DOCX in memory."""
+    from docx import Document
+    import io
+    doc = Document()
+    doc.add_paragraph("Solution")
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+MINIMAL_PDF_BYTES = _make_minimal_pdf()
+MINIMAL_DOCX_BYTES = _make_minimal_docx()
+
+
 def _build_grading_payload(*, manual_review: bool = False) -> dict[str, Any]:
     second_question = {
         "question_id": "Q2",
@@ -96,6 +123,11 @@ def reset_database() -> None:
     Base.metadata.create_all(bind=engine)
     yield
     close_all_sessions()
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiter() -> None:
+    main._auth_limiter._hits.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -296,7 +328,7 @@ class ApiHelper:
         teacher_headers: dict[str, str],
         assignment_id: int,
         filename: str = "solution.docx",
-        content: bytes = b"fake solution bytes",
+        content: bytes = MINIMAL_DOCX_BYTES,
         content_type: str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ):
         return self.client.post(
@@ -312,7 +344,7 @@ class ApiHelper:
         teacher_id: int,
         assignment_id: int,
         filename: str = "solution.docx",
-        content: bytes = b"fake solution bytes",
+        content: bytes = MINIMAL_DOCX_BYTES,
         content_type: str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ):
         return self.client.post(
@@ -327,7 +359,7 @@ class ApiHelper:
         student_headers: dict[str, str],
         assignment_id: int,
         filename: str = "submission.pdf",
-        content: bytes = b"%PDF-1.4 fake submission",
+        content: bytes = MINIMAL_PDF_BYTES,
         content_type: str = "application/pdf",
     ):
         return self.client.post(
@@ -343,7 +375,7 @@ class ApiHelper:
         assignment_id: int,
         student_id: int,
         filename: str = "submission.pdf",
-        content: bytes = b"%PDF-1.4 fake submission",
+        content: bytes = MINIMAL_PDF_BYTES,
         content_type: str = "application/pdf",
     ):
         return self.client.post(

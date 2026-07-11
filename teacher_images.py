@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shutil
 from pathlib import Path
 from zipfile import BadZipFile
@@ -17,7 +18,8 @@ from runtime_config import get_app_data_dir
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
 TEACHER_CACHE_ROOT = get_app_data_dir() / "teacher"
 CACHE_META_FILENAME = "source_meta.json"
-CACHE_META_VERSION = "paragraph-run-image-v2"
+CACHE_META_VERSION = "paragraph-run-image-v3"
+FORCE_GRAYSCALE = os.getenv("IMAGE_FORCE_GRAYSCALE", "").lower() in ("1", "true", "yes")
 
 
 def _list_image_paths(folder: Path) -> list[str]:
@@ -99,11 +101,13 @@ def _iter_run_images(document: Document, paragraph: object):
                 yield bytes(image_bytes)
 
 
-def _save_grayscale_png(image_bytes: bytes, target_path: Path) -> None:
+def _save_image_as_png(image_bytes: bytes, target_path: Path) -> None:
     with Image.open(io.BytesIO(image_bytes)) as image:
-        grayscale = image.convert("L")
-        grayscale.save(target_path, format="PNG")
-        grayscale.close()
+        if FORCE_GRAYSCALE:
+            image = image.convert("L")
+        else:
+            image = image.convert("RGB")
+        image.save(target_path, format="PNG")
 
 
 def ensure_teacher_images(answer_file_id: int, docx_path: str) -> tuple[list[str], list[str]]:
@@ -169,7 +173,7 @@ def ensure_teacher_images(answer_file_id: int, docx_path: str) -> tuple[list[str
                 else:
                     solution_index += 1
                     target_path = solution_dir / f"s_{solution_index}.png"
-                _save_grayscale_png(image_bytes, target_path)
+                _save_image_as_png(image_bytes, target_path)
 
         if not divider_found:
             raise RuntimeError("老师答案 Word 中未找到 'Solution' 分隔行。")

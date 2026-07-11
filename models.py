@@ -13,6 +13,16 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class SubmissionStatus:
+    """Submission status constants — single source of truth."""
+    UPLOADED = "uploaded"
+    FAILED_UPLOAD = "failed_upload"
+    GRADING = "grading"
+    GRADED = "graded"
+    NEEDS_MANUAL_REVIEW = "needs_manual_review"
+    FAILED_GRADING = "failed_grading"
+
+
 class Teacher(Base):
     __tablename__ = "teachers"
 

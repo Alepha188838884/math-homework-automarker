@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 import secrets
+import time as _time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import BinaryIO, Any
+
+logger = logging.getLogger(__name__)
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import func, select
@@ -17,8 +22,8 @@ from sqlalchemy.orm import Session
 
 from auth import create_access_token, decode_token, hash_password, verify_password
 from database import get_db
-from models import AnswerFile, Assignment, Course, GradeResult, Student, Submission, Teacher
-from qwen_service import grade_one_submission, upload_file_to_qwen
+from models import AnswerFile, Assignment, Course, GradeResult, Student, Submission, SubmissionStatus, Teacher
+from qwen_service import GRADABLE_STATUSES, grade_one_submission, upload_file_to_qwen
 from runtime_config import get_app_data_dir, get_cors_allow_origins, get_frontend_base_url
 from schemas import (
     AnswerFileResponse,
@@ -159,7 +164,10 @@ def sanitize_filename(filename: str) -> str:
     return safe or "upload.bin"
 
 
-def save_upload_to_local(upload_file: UploadFile, target_dir: Path) -> Path:
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MB
+
+
+def save_upload_to_local(upload_file: UploadFile, target_dir: Path, *, max_bytes: int = MAX_UPLOAD_BYTES) -> Path:
     if not upload_file.filename:
         raise HTTPException(status_code=400, detail="上传文件缺少文件名。")
 
@@ -168,17 +176,63 @@ def save_upload_to_local(upload_file: UploadFile, target_dir: Path) -> Path:
     local_path = target_dir / local_name
 
     source: BinaryIO = upload_file.file
-    with local_path.open("wb") as buffer:
-        while True:
-            chunk = source.read(1024 * 1024)
-            if not chunk:
-                break
-            if isinstance(chunk, str):
-                buffer.write(chunk.encode())
-            else:
-                buffer.write(chunk)
+    total_written = 0
+    try:
+        with local_path.open("wb") as buffer:
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                data = chunk.encode() if isinstance(chunk, str) else chunk
+                total_written += len(data)
+                if total_written > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"上传文件超过大小限制（最大 {max_bytes // (1024 * 1024)} MB）。",
+                    )
+                buffer.write(data)
+    except HTTPException:
+        local_path.unlink(missing_ok=True)
+        raise
 
+    logger.info("file_uploaded path=%s size=%d", local_path, total_written)
     return local_path
+
+
+def _validate_file_type(local_path: Path, expected_ext: str) -> None:
+    """Validate uploaded file by actually opening it with the real parser.
+
+    Empty (0-byte) files are allowed through — they will be caught later during
+    grading with a more specific error message.  Non-empty corrupted files are
+    rejected immediately to prevent them from becoming canonical answer files
+    or submissions that only fail much later.
+    """
+    try:
+        size = local_path.stat().st_size
+    except OSError:
+        return
+    if size == 0:
+        return  # empty file — let downstream processing handle it
+
+    ext = expected_ext.lower()
+    _error_detail = f"文件内容与扩展名 {expected_ext} 不匹配，请上传正确格式的文件。"
+
+    if ext == ".docx":
+        try:
+            from docx import Document
+            doc = Document(str(local_path))
+            _ = doc.paragraphs
+        except Exception:
+            local_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail=_error_detail)
+    elif ext == ".pdf":
+        try:
+            import fitz
+            pdf = fitz.open(str(local_path))
+            pdf.close()
+        except Exception:
+            local_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail=_error_detail)
 
 
 def _get_course_for_teacher_or_404(db: Session, course_id: int, teacher: Teacher) -> Course:
@@ -218,6 +272,7 @@ def _upload_solution_for_assignment(
         raise HTTPException(status_code=400, detail="官方答案必须是 .docx 文件。")
 
     local_path = save_upload_to_local(file, SOLUTIONS_DIR)
+    _validate_file_type(local_path, ".docx")
     try:
         qwen_file_id = upload_file_to_qwen(str(local_path))
     except Exception as exc:
@@ -258,6 +313,7 @@ def _create_submission_with_upload(
         raise HTTPException(status_code=400, detail="student 与 assignment 不属于同一课程。")
 
     local_path = save_upload_to_local(file, SUBMISSIONS_DIR)
+    _validate_file_type(local_path, ".pdf")
 
     def clear_grade_result(target: Submission) -> None:
         grade_result = target.grade_result
@@ -295,7 +351,7 @@ def _create_submission_with_upload(
         submission.original_filename = file.filename
         submission.file_path = str(local_path)
         submission.qwen_file_id = None
-        submission.status = "uploaded"
+        submission.status = SubmissionStatus.UPLOADED
         submission.error_message = None
         submission.graded_at = None
     else:
@@ -304,7 +360,7 @@ def _create_submission_with_upload(
             student_id=student.id,
             original_filename=file.filename,
             file_path=str(local_path),
-            status="uploaded",
+            status=SubmissionStatus.UPLOADED,
         )
         db.add(submission)
 
@@ -313,7 +369,7 @@ def _create_submission_with_upload(
     try:
         submission.qwen_file_id = upload_file_to_qwen(str(local_path))
     except Exception as exc:
-        submission.status = "failed_upload"
+        submission.status = SubmissionStatus.FAILED_UPLOAD
         submission.error_message = f"上传学生文件到 Qwen 失败: {exc}"[:2000]
         db.commit()
         db.refresh(submission)
@@ -323,7 +379,7 @@ def _create_submission_with_upload(
         ) from exc
 
     submission.error_message = None
-    submission.status = "uploaded"
+    submission.status = SubmissionStatus.UPLOADED
     db.commit()
     db.refresh(submission)
 
@@ -334,18 +390,20 @@ def _create_submission_with_upload(
             if old_file.exists() and old_file != local_path:
                 old_file.unlink()
         except OSError:
-            pass
+            logger.warning("cleanup_failed path=%s", old_path, exc_info=True)
 
     return SubmissionResponse.model_validate(submission)
 
 
 def _require_password_match(plain_password: str, password_hash: str) -> None:
     if not verify_password(plain_password, password_hash):
+        logger.info("auth_failed reason=bad_password")
         raise _unauthorized("邮箱或密码错误。")
 
 
 def _build_teacher_login_response(teacher: Teacher) -> TeacherLoginResponse:
     token = create_access_token({"sub": str(teacher.id), "role": "teacher"})
+    logger.info("auth_success role=teacher teacher_id=%s", teacher.id)
     return TeacherLoginResponse(
         access_token=token,
         teacher=TeacherPublic.model_validate(teacher),
@@ -354,6 +412,7 @@ def _build_teacher_login_response(teacher: Teacher) -> TeacherLoginResponse:
 
 def _build_student_login_response(student: Student) -> StudentLoginResponse:
     token = create_access_token({"sub": str(student.id), "role": "student"})
+    logger.info("auth_success role=student student_id=%s", student.id)
     return StudentLoginResponse(
         access_token=token,
         student=StudentPublic.model_validate(student),
@@ -505,6 +564,56 @@ def _extract_submission_metrics(
     )
 
 
+class _RateLimiter:
+    """Simple in-memory sliding-window rate limiter keyed by client IP.
+
+    Uses ``request.client.host`` only — never trusts client-controlled headers
+    like ``X-Forwarded-For``.  If the app runs behind a reverse proxy, configure
+    the proxy (or FastAPI's ``--proxy-headers``) so that ``client.host`` already
+    reflects the real client IP.
+
+    Bounded eviction: stale keys are pruned on every ``check`` call, and the
+    total number of tracked keys is capped to prevent unbounded memory growth.
+    """
+
+    _MAX_KEYS = 10_000
+
+    def __init__(self, max_calls: int = 10, window_seconds: int = 60) -> None:
+        self.max_calls = max_calls
+        self.window = window_seconds
+        self._hits: dict[str, list[float]] = defaultdict(list)
+
+    def _evict_stale(self, now: float) -> None:
+        window_start = now - self.window
+        stale = [k for k, v in self._hits.items() if not v or v[-1] <= window_start]
+        for k in stale:
+            del self._hits[k]
+        # Hard cap: if still too many keys, drop the oldest entries
+        if len(self._hits) > self._MAX_KEYS:
+            sorted_keys = sorted(self._hits, key=lambda k: self._hits[k][-1] if self._hits[k] else 0)
+            for k in sorted_keys[: len(self._hits) - self._MAX_KEYS]:
+                del self._hits[k]
+
+    def check(self, key: str) -> None:
+        now = _time.monotonic()
+        window_start = now - self.window
+        self._evict_stale(now)
+        hits = self._hits[key]
+        self._hits[key] = hits = [t for t in hits if t > window_start]
+        if len(hits) >= self.max_calls:
+            logger.warning("rate_limit_exceeded ip=%s window=%ds", key, self.window)
+            raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试。")
+        hits.append(now)
+
+
+_auth_limiter = _RateLimiter(max_calls=10, window_seconds=60)
+
+
+def _rate_limit_auth(request: Request) -> None:
+    client_ip = request.client.host if request.client else "unknown"
+    _auth_limiter.check(client_ip)
+
+
 @app.get("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
@@ -514,6 +623,7 @@ def health_check() -> dict[str, str]:
 def bootstrap_teacher(
     payload: BootstrapTeacherRequest,
     db: Session = Depends(get_db),
+    _rl: None = Depends(_rate_limit_auth),
 ) -> TeacherLoginResponse:
     teacher_count = int(db.scalar(select(func.count(Teacher.id))) or 0)
     if teacher_count > 0:
@@ -533,6 +643,7 @@ def bootstrap_teacher(
 def teacher_login(
     payload: TeacherLoginRequest,
     db: Session = Depends(get_db),
+    _rl: None = Depends(_rate_limit_auth),
 ) -> TeacherLoginResponse:
     teacher = _get_teacher_by_email(db, payload.email)
     if teacher is None:
@@ -545,6 +656,7 @@ def teacher_login(
 def teacher_entry(
     payload: TeacherEntryRequest,
     db: Session = Depends(get_db),
+    _rl: None = Depends(_rate_limit_auth),
 ) -> TeacherLoginResponse:
     teacher = _get_teacher_by_email(db, payload.email)
 
@@ -570,6 +682,7 @@ def teacher_entry(
 def student_login(
     payload: StudentLoginRequest,
     db: Session = Depends(get_db),
+    _rl: None = Depends(_rate_limit_auth),
 ) -> StudentLoginResponse:
     student = _get_student_by_email(db, payload.email)
     if student is None:
@@ -582,6 +695,7 @@ def student_login(
 def student_entry(
     payload: StudentEntryRequest,
     db: Session = Depends(get_db),
+    _rl: None = Depends(_rate_limit_auth),
 ) -> StudentLoginResponse:
     student = _get_student_by_email(db, payload.email)
 
@@ -1007,7 +1121,7 @@ def grade_all_submissions(
         db.execute(
             select(Submission).where(
                 Submission.assignment_id == assignment_id,
-                Submission.status != "graded",
+                Submission.status.in_(list(GRADABLE_STATUSES)),
             )
         )
         .scalars()
@@ -1047,7 +1161,7 @@ def get_submission_result(
     current_teacher: Teacher = Depends(get_current_teacher),
 ) -> SubmissionResultResponse:
     submission = _get_submission_for_teacher_or_404(db, submission_id, current_teacher)
-    if submission.status not in {"graded", "needs_manual_review"}:
+    if submission.status not in {SubmissionStatus.GRADED, SubmissionStatus.NEEDS_MANUAL_REVIEW}:
         raise HTTPException(status_code=404, detail="该 submission 尚未完成评分。")
 
     grade_result = db.execute(

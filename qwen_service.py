@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import mimetypes
 import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
+
+logger = logging.getLogger(__name__)
 
 from fastapi import HTTPException
 from openai import (
@@ -31,7 +34,7 @@ from sqlalchemy import delete
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from models import GradeQuestion, GradeResult, Submission
+from models import GradeQuestion, GradeResult, Submission, SubmissionStatus
 from qwen_client import QWEN_PLUS_MODEL, get_openai_client, parse_json_object
 from schemas import GradeQuestionItem, GradeSubmissionResponse
 from student_images import cleanup_student_tmp_images, export_student_pdf_to_images
@@ -548,29 +551,67 @@ def _set_submission_failed(db: Session, submission: Submission, status: str, err
     db.commit()
 
 
+GRADABLE_STATUSES = {
+    SubmissionStatus.UPLOADED,
+    SubmissionStatus.FAILED_GRADING,
+    SubmissionStatus.FAILED_UPLOAD,
+    SubmissionStatus.NEEDS_MANUAL_REVIEW,
+}
+
+
+def _try_claim_for_grading(db: Session, submission_id: int) -> Submission:
+    """Atomically transition a submission to GRADING status.
+
+    Uses SELECT ... FOR UPDATE to prevent concurrent grade requests from
+    racing on the same submission.  Returns the locked submission row if
+    the transition succeeds; raises 409 otherwise.
+    """
+    from sqlalchemy import select as sa_select
+
+    stmt = (
+        sa_select(Submission)
+        .where(Submission.id == submission_id)
+        .with_for_update()
+    )
+    submission = db.execute(stmt).scalar_one_or_none()
+    if submission is None:
+        raise HTTPException(status_code=404, detail=f"Submission {submission_id} 不存在。")
+
+    if submission.status not in GRADABLE_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"该提交当前状态为「{submission.status}」，无法发起批改。",
+        )
+
+    submission.status = SubmissionStatus.GRADING
+    submission.error_message = None
+    db.commit()
+    db.refresh(submission)
+    return submission
+
+
 def grade_one_submission(db: Session, submission_id: int) -> GradeSubmissionResponse:
+    # Pre-check: verify assignment and answer file exist BEFORE claiming.
+    # This avoids transitioning to GRADING when we'd immediately fail anyway.
     submission_record = db.get(Submission, submission_id)
     if submission_record is None:
         raise HTTPException(status_code=404, detail=f"Submission {submission_id} 不存在。")
-    submission_obj = _ensure_submission_instance(submission_record, "submission_record")
-    submission_id_value = _require_int(submission_obj.id, "submission.id")
-
-    assignment = submission_obj.assignment
+    pre_sub = _ensure_submission_instance(submission_record, "submission_record")
+    assignment = pre_sub.assignment
     if assignment is None:
         raise HTTPException(status_code=400, detail="Submission 未关联到有效的 assignment。")
-
     answer_file = assignment.answer_file
     if answer_file is None:
         raise HTTPException(status_code=400, detail="该 assignment 尚未上传官方答案文件。")
 
+    # Atomically claim the submission for grading.
+    submission_obj = _try_claim_for_grading(db, submission_id)
+    submission_id_value = _require_int(submission_obj.id, "submission.id")
+
     answer_file_id = _require_int(answer_file.id, "answer_file.id")
     answer_docx_path = _require_str(answer_file.file_path, "answer_file.file_path")
     submission_file_path = _require_str(submission_obj.file_path, "submission.file_path")
-
-    submission_obj.status = "grading"
-    submission_obj.error_message = None
-    db.commit()
-    db.refresh(submission_obj)
+    logger.info("grading_started submission_id=%s", submission_id_value)
 
     try:
         audit_payload = auto_grade_homework(
@@ -587,13 +628,14 @@ def grade_one_submission(db: Session, submission_id: int) -> GradeSubmissionResp
         if not isinstance(normalized_questions, list) or not isinstance(summary, dict):
             raise RuntimeError("评分结果结构无效。")
     except (RuntimeError, OpenAIError, ValueError, TypeError, OSError) as exc:
-        _set_submission_failed(db, submission_obj, "failed_grading", f"视觉评分失败: {exc}")
+        logger.error("grading_failed submission_id=%s error=%s", submission_id_value, exc)
+        _set_submission_failed(db, submission_obj, SubmissionStatus.FAILED_GRADING, f"视觉评分失败: {exc}")
         raise HTTPException(status_code=502, detail=f"视觉评分失败: {exc}") from exc
     finally:
         try:
             cleanup_student_tmp_images(submission_id_value)
         except OSError:
-            pass
+            logger.warning("cleanup_failed submission_id=%s", submission_id_value, exc_info=True)
 
     grade_result = submission_obj.grade_result
     if grade_result is None:
@@ -636,12 +678,16 @@ def grade_one_submission(db: Session, submission_id: int) -> GradeSubmissionResp
                 )
             )
 
-        submission_obj.status = "needs_manual_review" if needs_manual_review else "graded"
+        submission_obj.status = SubmissionStatus.NEEDS_MANUAL_REVIEW if needs_manual_review else SubmissionStatus.GRADED
         submission_obj.error_message = None
         submission_obj.graded_at = datetime.now(timezone.utc)
         db.commit()
+        logger.info(
+            "grading_completed submission_id=%s status=%s score=%.1f/%.1f",
+            submission_id_value, submission_obj.status, total_score, max_total_score,
+        )
     except (SQLAlchemyError, RuntimeError, ValueError, TypeError) as exc:
-        _set_submission_failed(db, submission_obj, "failed_grading", f"评分结果入库失败: {exc}")
+        _set_submission_failed(db, submission_obj, SubmissionStatus.FAILED_GRADING, f"评分结果入库失败: {exc}")
         raise HTTPException(status_code=500, detail=f"评分结果入库失败: {exc}") from exc
 
     if response_questions is None:

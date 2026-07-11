@@ -191,47 +191,22 @@ def test_corrupted_pdf_upload_fails_with_standardized_http_error(
     db_session_factory,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    def fail_if_external_called(*args, **kwargs):
-        raise AssertionError("grade_with_qwen_vision should not be called for a corrupted PDF")
-
-    monkeypatch.setattr(qwen_service, "grade_with_qwen_vision", fail_if_external_called)
-
-    solution_bytes = fixture_path("valid_solution.docx").read_bytes()
     corrupted_pdf_bytes = fixture_path("corrupted_submission.pdf").read_bytes()
 
-    api.upload_solution(
-        teacher_headers=teacher_account["headers"],
-        assignment_id=assignment["id"],
-        filename="valid_solution.docx",
-        content=solution_bytes,
-    )
     upload_response = api.upload_submission_as_student(
         student_headers=student_auth["headers"],
         assignment_id=assignment["id"],
         filename="corrupted_submission.pdf",
         content=corrupted_pdf_bytes,
     )
-    submission_id = upload_response.json()["id"]
-    grade_response = api.grade_submission(
-        teacher_headers=teacher_account["headers"],
-        submission_id=submission_id,
-    )
 
-    assert upload_response.status_code == 201
-    assert grade_response.status_code == 502
-    assert grade_response.json() == {
-        "detail": "视觉评分失败: 学生提交 PDF 文件无效，请检查文件是否为有效且非空的 PDF。"
+    assert upload_response.status_code == 400
+    assert upload_response.json() == {
+        "detail": "文件内容与扩展名 .pdf 不匹配，请上传正确格式的文件。"
     }
 
     with db_session_factory() as db:
-        submission = db.get(Submission, submission_id)
-        assert submission is not None
-        assert submission.status == "failed_grading"
-        assert submission.error_message == "视觉评分失败: 学生提交 PDF 文件无效，请检查文件是否为有效且非空的 PDF。"
-        assert submission.graded_at is None
-        assert db.query(GradeResult).count() == 0
-        assert db.query(GradeQuestion).count() == 0
-    assert not (local_processing_roots["student_root"] / str(submission_id)).exists()
+        assert db.query(Submission).count() == 0
 
 
 def test_empty_docx_upload_fails_with_standardized_http_error(
@@ -292,19 +267,10 @@ def test_empty_docx_upload_fails_with_standardized_http_error(
 def test_corrupted_docx_upload_fails_with_standardized_http_error(
     api,
     teacher_account,
-    student_auth,
     assignment,
-    local_processing_roots,
     db_session_factory,
-    monkeypatch: pytest.MonkeyPatch,
 ):
-    def fail_if_external_called(*args, **kwargs):
-        raise AssertionError("grade_with_qwen_vision should not be called for a corrupted DOCX")
-
-    monkeypatch.setattr(qwen_service, "grade_with_qwen_vision", fail_if_external_called)
-
     corrupted_docx_bytes = fixture_path("corrupted_solution.docx").read_bytes()
-    pdf_bytes = fixture_path("valid_submission.pdf").read_bytes()
 
     solution_response = api.upload_solution(
         teacher_headers=teacher_account["headers"],
@@ -312,36 +278,14 @@ def test_corrupted_docx_upload_fails_with_standardized_http_error(
         filename="corrupted_solution.docx",
         content=corrupted_docx_bytes,
     )
-    upload_response = api.upload_submission_as_student(
-        student_headers=student_auth["headers"],
-        assignment_id=assignment["id"],
-        filename="valid_submission.pdf",
-        content=pdf_bytes,
-    )
-    submission_id = upload_response.json()["id"]
-    answer_file_id = solution_response.json()["id"]
-    grade_response = api.grade_submission(
-        teacher_headers=teacher_account["headers"],
-        submission_id=submission_id,
-    )
 
-    assert solution_response.status_code == 200
-    assert upload_response.status_code == 201
-    assert grade_response.status_code == 502
-    assert grade_response.json() == {
-        "detail": "视觉评分失败: 老师答案 Word 文件无效，请检查文件是否为有效且非空的 .docx。"
+    assert solution_response.status_code == 400
+    assert solution_response.json() == {
+        "detail": "文件内容与扩展名 .docx 不匹配，请上传正确格式的文件。"
     }
 
     with db_session_factory() as db:
-        submission = db.get(Submission, submission_id)
-        assert submission is not None
-        assert submission.status == "failed_grading"
-        assert submission.error_message == "视觉评分失败: 老师答案 Word 文件无效，请检查文件是否为有效且非空的 .docx。"
-        assert submission.graded_at is None
-        assert db.query(GradeResult).count() == 0
-        assert db.query(GradeQuestion).count() == 0
-    assert not (local_processing_roots["teacher_root"] / str(answer_file_id)).exists()
-    assert not (local_processing_roots["student_root"] / str(submission_id)).exists()
+        assert db.query(AnswerFile).count() == 0
 
 
 def test_missing_solution_divider_docx_fails_during_local_preprocessing(

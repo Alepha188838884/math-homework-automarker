@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from conftest import MINIMAL_PDF_BYTES
 from models import AnswerFile, Submission
 
 
@@ -151,13 +152,13 @@ def test_repeated_submission_overwrites_existing_record(
         student_headers=student_auth["headers"],
         assignment_id=assignment["id"],
         filename="first.pdf",
-        content=b"%PDF first version",
+        content=MINIMAL_PDF_BYTES,
     )
     second_response = api.upload_submission_as_student(
         student_headers=student_auth["headers"],
         assignment_id=assignment["id"],
         filename="second.pdf",
-        content=b"%PDF second version",
+        content=MINIMAL_PDF_BYTES,
     )
     submissions_response = api.list_assignment_submissions(
         teacher_headers=teacher_account["headers"],

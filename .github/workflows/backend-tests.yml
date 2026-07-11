@@ -35,5 +35,12 @@ jobs:
       - name: Install Python dependencies
         run: python3 -m pip install -r requirements.txt
 
+      - name: Verify Alembic migrations apply cleanly
+        env:
+          DATABASE_URL: sqlite:///./ci_migration_test.sqlite3
+        run: |
+          alembic upgrade head
+          rm -f ./ci_migration_test.sqlite3
+
       - name: Run backend test suite
         run: python3 -m pytest -q tests
