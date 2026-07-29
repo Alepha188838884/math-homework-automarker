@@ -46,7 +46,6 @@ def test_grading_after_official_answer_returns_result_and_updates_db(
     assignment,
     stub_successful_grading,
     db_session_factory,
-    qwen_upload_calls,
 ):
     grading_stub = stub_successful_grading()
 
@@ -72,10 +71,6 @@ def test_grading_after_official_answer_returns_result_and_updates_db(
     assert upload_solution_response.status_code == 200
     upload_solution_body = upload_solution_response.json()
     submit_body = submit_response.json()
-    assert qwen_upload_calls == [
-        str(Path(upload_solution_body["file_path"]).resolve()),
-        str(Path(submit_body["file_path"]).resolve()),
-    ]
 
     assert grade_response.status_code == 200
     grade_body = grade_response.json()
@@ -162,7 +157,6 @@ def test_grading_failure_marks_submission_failed(
     assignment,
     stub_failed_grading,
     db_session_factory,
-    qwen_upload_calls,
 ):
     grading_stub = stub_failed_grading("mock grade failure")
     error_message = grading_stub["message"]
@@ -185,10 +179,6 @@ def test_grading_failure_marks_submission_failed(
     assert response.status_code == 502
     assert response.json() == {"detail": f"视觉评分失败: {error_message}"}
     assert len(grading_stub["calls"]) == 1
-    assert qwen_upload_calls == [
-        str(Path(solution_response.json()["file_path"]).resolve()),
-        str(Path(submit_response.json()["file_path"]).resolve()),
-    ]
 
     with db_session_factory() as db:
         submission = db.get(Submission, submission_id)
@@ -207,7 +197,6 @@ def test_manual_review_grading_preserves_per_question_result_structure(
     assignment,
     stub_successful_grading,
     db_session_factory,
-    qwen_upload_calls,
 ):
     grading_stub = stub_successful_grading(manual_review=True)
 
@@ -233,10 +222,6 @@ def test_manual_review_grading_preserves_per_question_result_structure(
     assert grade_response.status_code == 200
     grade_body = grade_response.json()
     assert len(grading_stub["calls"]) == 1
-    assert qwen_upload_calls == [
-        str(Path(solution_response.json()["file_path"]).resolve()),
-        str(Path(submit_response.json()["file_path"]).resolve()),
-    ]
     assert grade_body["submission_id"] == submission_id
     assert grade_body["status"] == "needs_manual_review"
     assert grade_body["total_score"] == 1.0

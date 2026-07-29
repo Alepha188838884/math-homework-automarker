@@ -99,7 +99,7 @@ class AnswerFile(Base):
     )
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     file_path: Mapped[str] = mapped_column(String(500), nullable=False)
-    qwen_file_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    qwen_file_id: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True, index=True)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
 

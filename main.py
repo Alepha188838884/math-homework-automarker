@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from auth import create_access_token, decode_token, hash_password, verify_password
 from database import get_db
 from models import AnswerFile, Assignment, Course, GradeResult, Student, Submission, SubmissionStatus, Teacher
-from qwen_service import GRADABLE_STATUSES, grade_one_submission, upload_file_to_qwen
+from grading_service import GRADABLE_STATUSES, grade_one_submission
 from runtime_config import get_app_data_dir, get_cors_allow_origins, get_frontend_base_url
 from schemas import (
     AnswerFileResponse,
@@ -268,15 +268,13 @@ def _upload_solution_for_assignment(
     assignment: Assignment,
     file: UploadFile,
 ) -> AnswerFileResponse:
-    if not file.filename or not file.filename.lower().endswith(".docx"):
-        raise HTTPException(status_code=400, detail="官方答案必须是 .docx 文件。")
+    filename_lower = (file.filename or "").lower()
+    if not file.filename or not (filename_lower.endswith(".docx") or filename_lower.endswith(".pdf")):
+        raise HTTPException(status_code=400, detail="官方答案必须是 .docx 或 .pdf 文件。")
 
     local_path = save_upload_to_local(file, SOLUTIONS_DIR)
-    _validate_file_type(local_path, ".docx")
-    try:
-        qwen_file_id = upload_file_to_qwen(str(local_path))
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"上传官方答案到 Qwen 失败: {exc}") from exc
+    expected_ext = ".pdf" if filename_lower.endswith(".pdf") else ".docx"
+    _validate_file_type(local_path, expected_ext)
 
     existing = db.execute(
         select(AnswerFile).where(AnswerFile.assignment_id == assignment.id)
@@ -285,14 +283,12 @@ def _upload_solution_for_assignment(
     if existing:
         existing.original_filename = file.filename
         existing.file_path = str(local_path)
-        existing.qwen_file_id = qwen_file_id
         answer_file = existing
     else:
         answer_file = AnswerFile(
             assignment_id=assignment.id,
             original_filename=file.filename,
             file_path=str(local_path),
-            qwen_file_id=qwen_file_id,
         )
         db.add(answer_file)
 
@@ -365,18 +361,6 @@ def _create_submission_with_upload(
         db.add(submission)
 
     db.flush()
-
-    try:
-        submission.qwen_file_id = upload_file_to_qwen(str(local_path))
-    except Exception as exc:
-        submission.status = SubmissionStatus.FAILED_UPLOAD
-        submission.error_message = f"上传学生文件到 Qwen 失败: {exc}"[:2000]
-        db.commit()
-        db.refresh(submission)
-        raise HTTPException(
-            status_code=502,
-            detail=f"上传学生文件到 Qwen 失败，submission_id={submission.id}: {exc}",
-        ) from exc
 
     submission.error_message = None
     submission.status = SubmissionStatus.UPLOADED

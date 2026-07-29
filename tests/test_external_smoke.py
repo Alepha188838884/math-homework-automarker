@@ -5,9 +5,7 @@ from pathlib import Path
 
 import pytest
 
-import qwen_service
 from models import GradeResult, Submission
-from qwen_client import get_dashscope_api_key
 
 
 pytestmark = pytest.mark.external_smoke
@@ -27,17 +25,10 @@ def _is_truthy(value: str | None) -> bool:
 
 def _require_external_smoke_env() -> None:
     if not _is_truthy(os.getenv("RUN_EXTERNAL_SMOKE")):
-        pytest.skip("External smoke disabled. Set RUN_EXTERNAL_SMOKE=1 to enable live DashScope/Qwen tests.")
+        pytest.skip("External smoke disabled. Set RUN_EXTERNAL_SMOKE=1 to enable live provider tests.")
 
-    try:
-        get_dashscope_api_key()
-    except RuntimeError as exc:
-        pytest.skip(f"External smoke skipped: {exc}")
-
-    if not os.getenv("QWEN_VISION_MODEL"):
-        pytest.skip(
-            "External smoke requires QWEN_VISION_MODEL to be set to a vision-capable DashScope model."
-        )
+    if not os.getenv("ARK_API_KEY"):
+        pytest.skip("External smoke requires ARK_API_KEY to be set for the doubao vision model.")
 
 
 def _maybe_skip_external_instability(response, *, stage: str) -> None:
@@ -48,10 +39,8 @@ def _maybe_skip_external_instability(response, *, stage: str) -> None:
     detail = str(body.get("detail", ""))
     lowered = detail.lower()
     transient_markers = (
-        "missing dashscope api key",
-        "placeholder api key",
-        "please set a real dashscope key",
-        "dashscope 鉴权失败",
+        "未配置 ark_api_key",
+        "未配置 dashscope_api_key",
         "connection error",
         "api connection",
         "timeout",
@@ -66,7 +55,7 @@ def _maybe_skip_external_instability(response, *, stage: str) -> None:
         pytest.skip(f"External smoke skipped during {stage}: {detail}")
 
 
-def test_real_dashscope_qwen_end_to_end_smoke(
+def test_real_doubao_end_to_end_smoke(
     api,
     teacher_account,
     student_auth,
@@ -88,9 +77,7 @@ def test_real_dashscope_qwen_end_to_end_smoke(
     assert solution_response.status_code == 200
 
     solution_body = solution_response.json()
-    assert isinstance(solution_body["qwen_file_id"], str)
-    assert solution_body["qwen_file_id"]
-    assert not solution_body["qwen_file_id"].startswith("stub-qwen-file-")
+    assert solution_body["qwen_file_id"] is None
 
     upload_response = api.upload_submission_as_student(
         student_headers=student_auth["headers"],
@@ -150,5 +137,5 @@ def test_real_dashscope_qwen_end_to_end_smoke(
         assert submission.status == grade_body["status"]
         assert submission.error_message is None
         assert grade_result is not None
-        assert grade_result.model_name == qwen_service.PIPELINE_MODEL_NAME
+        assert grade_result.model_name.startswith("vision:doubao:")
         assert isinstance(grade_result.raw_json, dict)

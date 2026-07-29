@@ -6,7 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from qwen_service import PIPELINE_MODEL_NAME, auto_grade_homework
+from grading_provider import get_active_provider_name
+from grading_service import auto_grade_homework
 from student_images import cleanup_student_tmp_images
 
 
@@ -32,7 +33,7 @@ def grade_files(answer_docx: Path, student_pdf: Path) -> dict[str, Any]:
     _validate_input_file(answer_docx, ".docx")
     _validate_input_file(student_pdf, ".pdf")
 
-    print(f"[1/3] 运行视觉批改流水线: {PIPELINE_MODEL_NAME}")
+    print(f"[1/3] 运行视觉批改流水线: {get_active_provider_name()}")
     cache_prefix = _build_cache_prefix(answer_docx, student_pdf)
     payload = auto_grade_homework(
         teacher_docx=str(answer_docx),
@@ -50,7 +51,7 @@ def grade_files(answer_docx: Path, student_pdf: Path) -> dict[str, Any]:
     print("[2/3] 读取视觉模型输出...")
     print("[3/3] 完成")
     return {
-        "pipeline_model": PIPELINE_MODEL_NAME,
+        "pipeline_provider": get_active_provider_name(),
         "raw_model_json": payload.get("raw_model_json", {}),
         "normalized": payload.get("normalized", {}),
         "artifacts": payload.get("artifacts", {}),

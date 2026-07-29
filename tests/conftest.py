@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import sys
 from copy import deepcopy
-from itertools import count
 from pathlib import Path
 from typing import Any
 
@@ -22,10 +21,9 @@ os.environ["DATABASE_URL"] = f"sqlite:///{(PYTEST_RUNTIME_DIR / 'backend_test.sq
 os.environ["AUTH_SECRET_KEY"] = "pytest-auth-secret"
 os.environ.setdefault("FRONTEND_BASE_URL", "http://testserver")
 
+import grading_service
 import main
-import qwen_service
 import student_images
-import teacher_images
 from db import Base, SessionLocal, engine
 
 
@@ -112,7 +110,7 @@ def _build_grading_payload(*, manual_review: bool = False) -> dict[str, Any]:
                 "needs_manual_review": manual_review,
             },
         },
-        "model_meta": {"model_name": "stub-qwen-vision"},
+        "model_meta": {"model_name": "stub-vision-model", "provider": "stub"},
     }
 
 
@@ -138,36 +136,10 @@ def isolate_runtime_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(main, "SUBMISSIONS_DIR", app_data_dir / "submissions")
     monkeypatch.setattr(main, "TEACHER_CACHE_DIR", app_data_dir / "teacher")
     monkeypatch.setattr(main, "STUDENT_TMP_DIR", app_data_dir / "tmp" / "submissions")
-    monkeypatch.setattr(teacher_images, "TEACHER_CACHE_ROOT", app_data_dir / "teacher")
+    monkeypatch.setattr(grading_service, "TEACHER_CACHE_ROOT", app_data_dir / "teacher")
     monkeypatch.setattr(student_images, "STUDENT_TMP_ROOT", app_data_dir / "tmp" / "submissions")
     main.initialize_app()
     yield
-
-
-@pytest.fixture(autouse=True)
-def qwen_upload_calls() -> list[str]:
-    return []
-
-
-@pytest.fixture(autouse=True)
-def stub_qwen_file_upload(
-    request: pytest.FixtureRequest,
-    monkeypatch: pytest.MonkeyPatch,
-    qwen_upload_calls: list[str],
-):
-    if request.node.get_closest_marker("external_smoke") is not None:
-        return None
-
-    file_ids = count(1)
-
-    def fake_upload_file_to_qwen(local_path: str) -> str:
-        resolved_path = str(Path(local_path).resolve())
-        assert Path(resolved_path).exists()
-        qwen_upload_calls.append(resolved_path)
-        return f"stub-qwen-file-{next(file_ids)}"
-
-    monkeypatch.setattr(main, "upload_file_to_qwen", fake_upload_file_to_qwen)
-    return fake_upload_file_to_qwen
 
 
 @pytest.fixture
@@ -180,7 +152,7 @@ def stub_successful_grading(monkeypatch: pytest.MonkeyPatch):
             calls.append(deepcopy(_))
             return deepcopy(payload)
 
-        monkeypatch.setattr(qwen_service, "auto_grade_homework", fake_auto_grade_homework)
+        monkeypatch.setattr(grading_service, "auto_grade_homework", fake_auto_grade_homework)
         return {"payload": payload, "calls": calls}
 
     return apply
@@ -195,7 +167,7 @@ def stub_failed_grading(monkeypatch: pytest.MonkeyPatch):
             calls.append(deepcopy(_))
             raise RuntimeError(message)
 
-        monkeypatch.setattr(qwen_service, "auto_grade_homework", fake_auto_grade_homework)
+        monkeypatch.setattr(grading_service, "auto_grade_homework", fake_auto_grade_homework)
         return {"message": message, "calls": calls}
 
     return apply

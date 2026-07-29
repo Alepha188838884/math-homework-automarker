@@ -53,7 +53,6 @@ def test_teacher_can_upload_official_answer_file_and_persist_record(
     teacher_account,
     assignment,
     db_session_factory,
-    qwen_upload_calls,
 ):
     response = api.upload_solution(
         teacher_headers=teacher_account["headers"],
@@ -65,18 +64,17 @@ def test_teacher_can_upload_official_answer_file_and_persist_record(
     assert body["id"] > 0
     assert body["assignment_id"] == assignment["id"]
     assert body["original_filename"] == "solution.docx"
-    assert body["qwen_file_id"] == "stub-qwen-file-1"
+    assert body["qwen_file_id"] is None
     assert body["uploaded_at"]
     assert body["updated_at"]
     assert Path(body["file_path"]).exists()
-    assert qwen_upload_calls == [str(Path(body["file_path"]).resolve())]
 
     with db_session_factory() as db:
         answer_file = db.get(AnswerFile, body["id"])
         assert answer_file is not None
         assert answer_file.assignment_id == assignment["id"]
         assert answer_file.original_filename == "solution.docx"
-        assert answer_file.qwen_file_id == "stub-qwen-file-1"
+        assert answer_file.qwen_file_id is None
         assert Path(answer_file.file_path).exists()
 
 
@@ -86,7 +84,6 @@ def test_student_submission_appears_in_teacher_list_and_student_overview(
     student_auth,
     assignment,
     db_session_factory,
-    qwen_upload_calls,
 ):
     submit_response = api.upload_submission_as_student(
         student_headers=student_auth["headers"],
@@ -105,12 +102,11 @@ def test_student_submission_appears_in_teacher_list_and_student_overview(
     assert submit_body["assignment_id"] == assignment["id"]
     assert submit_body["student_id"] == student_auth["student"]["id"]
     assert submit_body["original_filename"] == "submission.pdf"
-    assert submit_body["qwen_file_id"] == "stub-qwen-file-1"
+    assert submit_body["qwen_file_id"] is None
     assert submit_body["status"] == "uploaded"
     assert submit_body["error_message"] is None
     assert submit_body["graded_at"] is None
     assert Path(submit_body["file_path"]).exists()
-    assert qwen_upload_calls == [str(Path(submit_body["file_path"]).resolve())]
 
     assert submissions_response.status_code == 200
     submissions = submissions_response.json()
@@ -135,7 +131,7 @@ def test_student_submission_appears_in_teacher_list_and_student_overview(
         assert submission.assignment_id == assignment["id"]
         assert submission.student_id == student_auth["student"]["id"]
         assert submission.status == "uploaded"
-        assert submission.qwen_file_id == "stub-qwen-file-1"
+        assert submission.qwen_file_id is None
         assert submission.error_message is None
         assert Path(submission.file_path).exists()
 
@@ -146,7 +142,6 @@ def test_repeated_submission_overwrites_existing_record(
     student_auth,
     assignment,
     db_session_factory,
-    qwen_upload_calls,
 ):
     first_response = api.upload_submission_as_student(
         student_headers=student_auth["headers"],
@@ -175,11 +170,10 @@ def test_repeated_submission_overwrites_existing_record(
     assert second_submission["id"] == first_submission["id"]
     assert second_submission["original_filename"] == "second.pdf"
     assert second_submission["status"] == "uploaded"
-    assert second_submission["qwen_file_id"] == "stub-qwen-file-2"
-    assert first_submission["qwen_file_id"] == "stub-qwen-file-1"
+    assert second_submission["qwen_file_id"] is None
+    assert first_submission["qwen_file_id"] is None
     assert not first_path.exists()
     assert second_path.exists()
-    assert qwen_upload_calls == [str(first_path.resolve()), str(second_path.resolve())]
 
     submissions = submissions_response.json()
     assert len(submissions) == 1
@@ -194,6 +188,6 @@ def test_repeated_submission_overwrites_existing_record(
         assert submission_count == 1
         assert persisted.original_filename == "second.pdf"
         assert persisted.file_path == second_submission["file_path"]
-        assert persisted.qwen_file_id == "stub-qwen-file-2"
+        assert persisted.qwen_file_id is None
         assert persisted.status == "uploaded"
         assert persisted.graded_at is None

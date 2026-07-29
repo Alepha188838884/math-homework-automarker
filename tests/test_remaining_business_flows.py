@@ -208,7 +208,7 @@ def test_teacher_can_upload_submission_for_student_and_students_status_tracks_pr
     assert upload_body["status"] == "uploaded"
     assert upload_body["error_message"] is None
     assert upload_body["graded_at"] is None
-    assert upload_body["qwen_file_id"] == "stub-qwen-file-2"
+    assert upload_body["qwen_file_id"] is None
     assert Path(upload_body["file_path"]).read_bytes() == pdf_bytes
 
     status_response = api.list_assignment_student_status(
@@ -393,7 +393,7 @@ def test_legacy_solution_upload_path_persists_answer_file_and_bytes(
     }
     assert body["assignment_id"] == assignment["id"]
     assert body["original_filename"] == "legacy-solution.docx"
-    assert body["qwen_file_id"] == "stub-qwen-file-1"
+    assert body["qwen_file_id"] is None
     assert Path(body["file_path"]).read_bytes() == solution_bytes
 
     with db_session_factory() as db:
@@ -402,7 +402,7 @@ def test_legacy_solution_upload_path_persists_answer_file_and_bytes(
         answer_file = answer_files[0]
         assert answer_file.id == body["id"]
         assert answer_file.assignment_id == assignment["id"]
-        assert answer_file.qwen_file_id == "stub-qwen-file-1"
+        assert answer_file.qwen_file_id is None
         assert Path(answer_file.file_path).read_bytes() == solution_bytes
 
 
@@ -453,7 +453,7 @@ def test_legacy_solution_upload_enforces_teacher_identity_and_validation_without
         content_type="text/plain",
     )
     assert invalid_type_response.status_code == 400
-    assert invalid_type_response.json() == {"detail": "官方答案必须是 .docx 文件。"}
+    assert invalid_type_response.json() == {"detail": "官方答案必须是 .docx 或 .pdf 文件。"}
 
     with db_session_factory() as db:
         assert db.query(AnswerFile).count() == 0

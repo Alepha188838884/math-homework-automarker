@@ -68,7 +68,7 @@ def test_missing_file_and_bad_extension_return_expected_errors(
     )
 
     assert bad_solution_response.status_code == 400
-    assert bad_solution_response.json() == {"detail": "官方答案必须是 .docx 文件。"}
+    assert bad_solution_response.json() == {"detail": "官方答案必须是 .docx 或 .pdf 文件。"}
 
     assert missing_file_response.status_code == 422
     body = missing_file_response.json()

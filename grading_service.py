@@ -2,98 +2,39 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
 import mimetypes
-import os
-import time
+import shutil
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
+from zipfile import BadZipFile
 
-logger = logging.getLogger(__name__)
-
+import fitz
+from docx import Document
+from docx.opc.exceptions import PackageNotFoundError
 from fastapi import HTTPException
-from openai import (
-    APIConnectionError,
-    APIStatusError,
-    APITimeoutError,
-    AuthenticationError,
-    BadRequestError,
-    OpenAIError,
-    RateLimitError,
-)
-from openai.types.chat import (
-    ChatCompletionContentPartImageParam,
-    ChatCompletionContentPartParam,
-    ChatCompletionContentPartTextParam,
-    ChatCompletionMessageParam,
-    ChatCompletionSystemMessageParam,
-    ChatCompletionUserMessageParam,
-)
+from openai import OpenAIError
 from sqlalchemy import delete
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+import grading_provider
+from file_processor import convert_docx_to_pdf
 from models import GradeQuestion, GradeResult, Submission, SubmissionStatus
-from qwen_client import QWEN_PLUS_MODEL, get_openai_client, parse_json_object
+from runtime_config import get_app_data_dir
 from schemas import GradeQuestionItem, GradeSubmissionResponse
 from student_images import cleanup_student_tmp_images, export_student_pdf_to_images
-from teacher_images import ensure_teacher_images
+
+logger = logging.getLogger(__name__)
 
 
-QWEN_VISION_MODEL = os.getenv("QWEN_VISION_MODEL", QWEN_PLUS_MODEL)
-QWEN_MODEL_NAME = QWEN_VISION_MODEL
-PIPELINE_MODEL_NAME = f"vision:{QWEN_VISION_MODEL}"
-
-
-def upload_file_to_qwen(local_path: str) -> str:
-    """Upload one local file to DashScope and return file_id."""
-
-    file_path = Path(local_path)
-    if not file_path.exists():
-        raise FileNotFoundError(f"文件不存在: {local_path}")
-
-    client = get_openai_client()
-    with file_path.open("rb") as file_obj:
-        try:
-            response = client.files.create(file=file_obj, purpose=cast(Any, "file-extract"))
-        except AuthenticationError as exc:
-            raise RuntimeError("DashScope 鉴权失败（401），请检查 DASHSCOPE_API_KEY。") from exc
-
-    file_id = getattr(response, "id", None)
-    if not file_id:
-        raise RuntimeError("Qwen 文件上传成功但未返回 file_id。")
-    return file_id
-
-
-def _extract_text_from_completion(completion: Any) -> str:
-    choices = getattr(completion, "choices", None)
-    if not choices:
-        raise RuntimeError("Qwen 返回为空。")
-
-    message = choices[0].message
-    content = message.content
-
-    if isinstance(content, str):
-        text = content.strip()
-        if not text:
-            raise RuntimeError("Qwen 返回文本为空。")
-        return text
-
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict):
-                item_text = item.get("text")
-            else:
-                item_text = getattr(item, "text", None)
-            if item_text:
-                parts.append(str(item_text))
-        merged = "\n".join(parts).strip()
-        if merged:
-            return merged
-
-    raise RuntimeError("Qwen 返回内容格式不支持。")
+TEACHER_CACHE_ROOT = get_app_data_dir() / "teacher"
+CACHE_META_FILENAME = "source_meta.json"
+CACHE_META_VERSION = "answer-page-image-v1"
+ANSWER_PAGE_DPI = 200
 
 
 def _bool_from_any(value: Any) -> bool:
@@ -167,105 +108,6 @@ def _image_path_to_data_url(image_path: str) -> str:
     mime_type = mimetypes.types_map.get(suffix) or "image/png"
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:{mime_type};base64,{encoded}"
-
-
-def _build_vision_messages(
-    teacher_question_images: list[str],
-    teacher_solution_images: list[str],
-    student_images: list[str],
-) -> list[ChatCompletionMessageParam]:
-    question_count = len(teacher_question_images)
-    solution_count = len(teacher_solution_images)
-    student_count = len(student_images)
-
-    q_start, q_end = 1, question_count
-    s_start, s_end = q_end + 1, q_end + solution_count
-    st_start, st_end = s_end + 1, s_end + student_count
-
-    system_prompt = """
-你是严格的数学作业视觉批改助手。
-你会按固定顺序接收三组图片：
-1) 老师题目图；2) 老师标准解答图；3) 学生作答图。
-
-你必须先做“题目内容匹配”，再做评分：
-- 匹配依据是题目内容本身，不依赖纸面题号。
-- 只有在确认匹配成功后，才允许自动评分。
-- 若无法确认匹配或证据不足，必须标记为人工复核。
-
-输出必须是严格 JSON，不要 Markdown，不要额外文字。
-"""
-
-    user_prompt = f"""
-图片索引范围如下：
-- 老师题目图: {q_start}..{q_end}
-- 老师解答图: {s_start}..{s_end}
-- 学生作答图: {st_start}..{st_end}
-
-请执行：
-1. 依据老师题目图，识别所有题块，生成内部题号 Q1, Q2, ...。
-2. 对每个 Qi，在学生图中找同题内容并评估 question_match。
-3. 若 question_match=false 或信心不足，必须设置：
-   auto_graded=false, score=null, is_correct=null。
-4. 仅当 question_match=true 时，结合老师解答图进行评分。
-
-请只输出以下 JSON 结构：
-{{
-  "questions": [
-    {{
-      "question_id": "Q1",
-      "question_brief": "...",
-      "teacher_question_image_indices": [1],
-      "teacher_solution_image_indices": [3],
-      "student_answer_image_indices": [8],
-      "question_match": true,
-      "question_match_confidence": 0.95,
-      "auto_graded": true,
-      "score": 1,
-      "max_score": 1,
-      "is_correct": true,
-      "student_final_answer": "...",
-      "comment": "..."
-    }}
-  ],
-  "summary": {{
-    "total_score": 1,
-    "max_total_score": 1,
-    "auto_graded_count": 1,
-    "manual_review_count": 0
-  }}
-}}
-
-硬约束：
-- 每个老师题块必须有且仅有一条 questions 记录。
-- 不要输出 JSON 之外的任何内容。
-"""
-
-    text_part: ChatCompletionContentPartTextParam = {"type": "text", "text": user_prompt.strip()}
-    content: list[ChatCompletionContentPartParam] = [text_part]
-    ordered_images = teacher_question_images + teacher_solution_images + student_images
-    for image_path in ordered_images:
-        image_part: ChatCompletionContentPartImageParam = {
-            "type": "image_url",
-            "image_url": {"url": _image_path_to_data_url(image_path)},
-        }
-        content.append(image_part)
-
-    system_message: ChatCompletionSystemMessageParam = {
-        "role": "system",
-        "content": system_prompt.strip(),
-    }
-    user_message: ChatCompletionUserMessageParam = {"role": "user", "content": content}
-    return [system_message, user_message]
-
-
-def _parse_qwen_vision_json(raw_text: str) -> dict[str, Any]:
-    parsed = parse_json_object(raw_text)
-    if not isinstance(parsed, dict):
-        raise RuntimeError("视觉评分输出不是 JSON 对象。")
-    questions = parsed.get("questions")
-    if not isinstance(questions, list):
-        raise RuntimeError("视觉评分输出缺少 questions 数组。")
-    return parsed
 
 
 def _normalize_vision_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -435,55 +277,146 @@ def _row_common_fields(row: dict[str, Any]) -> tuple[int, float | None, float, b
     )
 
 
-def grade_with_qwen_vision(
-    teacher_question_images: list[str],
-    teacher_solution_images: list[str],
-    student_images: list[str],
-) -> dict[str, Any]:
-    if not teacher_question_images:
-        raise RuntimeError("老师题目图片为空，无法评分。")
-    if not teacher_solution_images:
-        raise RuntimeError("老师解答图片为空，无法评分。")
-    if not student_images:
-        raise RuntimeError("学生作业图片为空，无法评分。")
-
-    messages = _build_vision_messages(
-        teacher_question_images=teacher_question_images,
-        teacher_solution_images=teacher_solution_images,
-        student_images=student_images,
-    )
-
-    retriable_errors = (
-        APIConnectionError,
-        APITimeoutError,
-        APIStatusError,
-        RateLimitError,
-        BadRequestError,
-        OpenAIError,
-        RuntimeError,
-    )
-    last_exc: Exception | None = None
-    for attempt in range(3):
-        try:
-            client = get_openai_client()
-            completion = client.chat.completions.create(
-                model=QWEN_VISION_MODEL,
-                messages=messages,
-                temperature=0,
-            )
-            raw_text = _extract_text_from_completion(completion)
-            return _parse_qwen_vision_json(raw_text)
-        except retriable_errors as exc:
-            last_exc = exc
-            if attempt < 2:
-                time.sleep(2**attempt)
-
-    raise RuntimeError(f"Qwen 视觉评分调用失败: {last_exc}")
-
-
 def _stable_positive_id(seed: str) -> int:
     digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()
     return (int(digest[:12], 16) % 2_000_000_000) + 1
+
+
+def _build_source_fingerprint(path: Path) -> str:
+    stat = path.stat()
+    return f"{stat.st_mtime_ns}-{stat.st_size}"
+
+
+def _read_cache_meta(meta_path: Path) -> dict[str, str] | None:
+    if not meta_path.exists():
+        return None
+    try:
+        raw = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    source_path = raw.get("source_path")
+    source_fingerprint = raw.get("source_fingerprint")
+    version = raw.get("version")
+    if (
+        not isinstance(source_path, str)
+        or not isinstance(source_fingerprint, str)
+        or not isinstance(version, str)
+    ):
+        return None
+    return {
+        "source_path": source_path,
+        "source_fingerprint": source_fingerprint,
+        "version": version,
+    }
+
+
+def _write_cache_meta(meta_path: Path, source_path: Path, source_fingerprint: str) -> None:
+    payload = {
+        "source_path": str(source_path),
+        "source_fingerprint": source_fingerprint,
+        "version": CACHE_META_VERSION,
+    }
+    meta_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _list_page_image_paths(folder: Path) -> list[str]:
+    if not folder.exists():
+        return []
+
+    def _page_num(path: Path) -> int:
+        try:
+            return int(path.stem.split("_")[-1])
+        except ValueError:
+            return 0
+
+    image_paths = [
+        path
+        for path in folder.iterdir()
+        if path.is_file() and path.suffix.lower() == ".png" and path.stem.startswith("page_")
+    ]
+    image_paths.sort(key=_page_num)
+    return [str(path.resolve()) for path in image_paths]
+
+
+def _render_pdf_pages(pdf_path: str, pages_dir: Path) -> None:
+    try:
+        document = fitz.open(pdf_path)
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("老师答案 PDF 文件无效，请检查文件是否为有效且非空的 .pdf。") from exc
+
+    try:
+        zoom = ANSWER_PAGE_DPI / 72
+        matrix = fitz.Matrix(zoom, zoom)
+        for page_index in range(document.page_count):
+            page = document.load_page(page_index)
+            pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+            page_path = pages_dir / f"page_{page_index + 1}.png"
+            pixmap.save(str(page_path))
+    finally:
+        document.close()
+
+
+def ensure_answer_page_images(answer_file_id: int, answer_path: str) -> list[str]:
+    """Ensure the teacher answer file (docx or pdf) is rendered to cached page PNGs.
+
+    Cache path: data/teacher/<answer_file_id>/pages/
+    """
+
+    if answer_file_id <= 0:
+        raise RuntimeError("answer_file_id 无效，无法建立老师答案图片缓存。")
+
+    source_path = Path(answer_path).expanduser().resolve()
+    if not source_path.exists():
+        raise RuntimeError(f"老师答案文件不存在: {source_path}")
+    source_fingerprint = _build_source_fingerprint(source_path)
+
+    answer_dir = TEACHER_CACHE_ROOT / str(answer_file_id)
+    pages_dir = answer_dir / "pages"
+    meta_path = answer_dir / CACHE_META_FILENAME
+
+    cached_pages = _list_page_image_paths(pages_dir)
+    cache_meta = _read_cache_meta(meta_path)
+    if (
+        cached_pages
+        and cache_meta is not None
+        and cache_meta.get("source_path") == str(source_path)
+        and cache_meta.get("source_fingerprint") == source_fingerprint
+        and cache_meta.get("version") == CACHE_META_VERSION
+    ):
+        return cached_pages
+
+    if pages_dir.exists():
+        shutil.rmtree(pages_dir)
+    pages_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        suffix = source_path.suffix.lower()
+        if suffix == ".docx":
+            try:
+                document = Document(str(source_path))
+                _ = document.paragraphs
+            except (PackageNotFoundError, BadZipFile, ValueError) as exc:
+                raise RuntimeError("老师答案 Word 文件无效，请检查文件是否为有效且非空的 .docx。") from exc
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                pdf_path = convert_docx_to_pdf(str(source_path), tmp_dir)
+                _render_pdf_pages(pdf_path, pages_dir)
+        elif suffix == ".pdf":
+            _render_pdf_pages(str(source_path), pages_dir)
+        else:
+            raise RuntimeError(f"不支持的官方答案文件格式: {suffix}")
+
+        pages = _list_page_image_paths(pages_dir)
+        if not pages:
+            raise RuntimeError("老师答案文件未生成任何页面图片。")
+
+        _write_cache_meta(meta_path, source_path, source_fingerprint)
+        return pages
+    except Exception:
+        shutil.rmtree(answer_dir, ignore_errors=True)
+        raise
 
 
 def auto_grade_homework(
@@ -504,37 +437,28 @@ def auto_grade_homework(
             raise RuntimeError("submission_id 无效，且未提供 cache_prefix。")
         submission_id = _stable_positive_id(f"submission:{cache_prefix}:{Path(student_pdf).name}")
 
-    teacher_question_images, teacher_solution_images = ensure_teacher_images(answer_file_id, teacher_docx)
+    answer_images = ensure_answer_page_images(answer_file_id, teacher_docx)
     student_images = export_student_pdf_to_images(submission_id, student_pdf)
 
-    raw_model_json = grade_with_qwen_vision(
-        teacher_question_images=teacher_question_images,
-        teacher_solution_images=teacher_solution_images,
-        student_images=student_images,
-    )
+    answer_data_urls = [_image_path_to_data_url(path) for path in answer_images]
+    student_data_urls = [_image_path_to_data_url(path) for path in student_images]
+
+    raw_model_json, model_id = grading_provider.call_grading_model(answer_data_urls, student_data_urls)
     normalized = _normalize_vision_result(raw_model_json)
 
-    q_count = len(teacher_question_images)
-    s_count = len(teacher_solution_images)
-    st_count = len(student_images)
+    provider = grading_provider.get_active_provider_name()
 
     return {
         "raw_model_json": raw_model_json,
         "normalized": normalized,
         "model_meta": {
-            "model_name": QWEN_VISION_MODEL,
-            "teacher_question_image_count": q_count,
-            "teacher_solution_image_count": s_count,
-            "student_image_count": st_count,
-        },
-        "image_order_meta": {
-            "teacher_question_range": [1, q_count],
-            "teacher_solution_range": [q_count + 1, q_count + s_count],
-            "student_answer_range": [q_count + s_count + 1, q_count + s_count + st_count],
+            "model_name": model_id,
+            "provider": provider,
+            "answer_image_count": len(answer_images),
+            "student_image_count": len(student_images),
         },
         "artifacts": {
-            "teacher_question_images": teacher_question_images,
-            "teacher_solution_images": teacher_solution_images,
+            "answer_images": answer_images,
             "student_images": student_images,
         },
         "runtime_ids": {
@@ -609,13 +533,13 @@ def grade_one_submission(db: Session, submission_id: int) -> GradeSubmissionResp
     submission_id_value = _require_int(submission_obj.id, "submission.id")
 
     answer_file_id = _require_int(answer_file.id, "answer_file.id")
-    answer_docx_path = _require_str(answer_file.file_path, "answer_file.file_path")
+    answer_file_path = _require_str(answer_file.file_path, "answer_file.file_path")
     submission_file_path = _require_str(submission_obj.file_path, "submission.file_path")
     logger.info("grading_started submission_id=%s", submission_id_value)
 
     try:
         audit_payload = auto_grade_homework(
-            teacher_docx=answer_docx_path,
+            teacher_docx=answer_file_path,
             student_pdf=submission_file_path,
             answer_file_id=answer_file_id,
             submission_id=submission_id_value,
@@ -648,7 +572,10 @@ def grade_one_submission(db: Session, submission_id: int) -> GradeSubmissionResp
         not bool(question.get("auto_graded", False)) for question in normalized_questions
     )
 
-    grade_result.model_name = PIPELINE_MODEL_NAME
+    model_meta = audit_payload.get("model_meta")
+    provider = model_meta.get("provider") if isinstance(model_meta, dict) else None
+    model_id = model_meta.get("model_name") if isinstance(model_meta, dict) else None
+    grade_result.model_name = f"vision:{provider}:{model_id}"
     grade_result.raw_json = audit_payload
     grade_result.total_score = total_score
     grade_result.max_total_score = max_total_score

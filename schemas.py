@@ -146,7 +146,7 @@ class AnswerFileResponse(BaseModel):
     assignment_id: int
     original_filename: str
     file_path: str
-    qwen_file_id: str
+    qwen_file_id: str | None
     uploaded_at: datetime
     updated_at: datetime
 
