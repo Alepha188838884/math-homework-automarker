@@ -114,7 +114,7 @@ class JoinLinkResponse(BaseModel):
 class StudentCreate(BaseModel):
     name: str
     email: str
-    password: str
+    password: str = Field(min_length=8)
 
 
 class StudentJoinRequest(BaseModel):
@@ -266,4 +266,4 @@ class QuestionOverrideRequest(BaseModel):
 
 
 class StudentPasswordResetRequest(BaseModel):
-    new_password: str
+    new_password: str = Field(min_length=8)

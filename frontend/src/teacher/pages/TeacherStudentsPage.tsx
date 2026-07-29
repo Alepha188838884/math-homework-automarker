@@ -40,8 +40,8 @@ function TeacherStudentsPage() {
     if (selectedCourseId === null) return;
     const newPassword = window.prompt("请输入该学生的新密码：");
     if (newPassword === null) return;
-    if (!newPassword.trim()) {
-      setMessage({ type: "error", text: "密码不能为空。" });
+    if (newPassword.length < 8) {
+      setMessage({ type: "error", text: "密码至少 8 位。" });
       return;
     }
     void resetStudentPasswordAction(selectedCourseId, studentId, newPassword);

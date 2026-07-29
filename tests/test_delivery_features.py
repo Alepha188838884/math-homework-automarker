@@ -570,3 +570,15 @@ def test_reset_password_student_not_in_course_returns_404(api, teacher_account, 
     )
     assert response.status_code == 404
     assert response.json() == {"detail": "Student 999999 不存在。"}
+
+
+def test_reset_password_too_short_returns_422(
+    api, teacher_account, student_account, course
+):
+    response = api.reset_student_password(
+        teacher_headers=teacher_account["headers"],
+        course_id=course["id"],
+        student_id=student_account["id"],
+        new_password="short12",
+    )
+    assert response.status_code == 422
