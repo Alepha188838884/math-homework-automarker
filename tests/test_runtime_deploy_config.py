@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.exc import SQLAlchemyError
 
 import db
 import main
@@ -62,6 +64,19 @@ def test_health_route_allows_frontend_origin_via_cors(client):
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
     assert response.headers["access-control-allow-origin"] == "http://testserver"
+
+
+def test_lifespan_survives_reset_stuck_grading_submissions_failure(monkeypatch: pytest.MonkeyPatch):
+    def fake_reset_stuck_grading_submissions(_db):
+        raise SQLAlchemyError("stuck grading query failed")
+
+    monkeypatch.setattr(main, "reset_stuck_grading_submissions", fake_reset_stuck_grading_submissions)
+
+    with TestClient(main.app) as test_client:
+        response = test_client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
 
 
 def test_create_database_engine_uses_pre_ping_and_respects_echo(monkeypatch: pytest.MonkeyPatch):

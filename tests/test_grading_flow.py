@@ -175,6 +175,48 @@ def test_grading_failure_marks_submission_failed(
         assert grade_result is None
 
 
+def test_grading_background_job_records_unexpected_failure(
+    api,
+    teacher_account,
+    student_auth,
+    assignment,
+    db_session_factory,
+    monkeypatch,
+):
+    def fake_auto_grade_homework(**_):
+        raise KeyError("boom")
+
+    monkeypatch.setattr(grading_service, "auto_grade_homework", fake_auto_grade_homework)
+
+    solution_response = api.upload_solution(
+        teacher_headers=teacher_account["headers"],
+        assignment_id=assignment["id"],
+    )
+    submit_response = api.upload_submission_as_student(
+        student_headers=student_auth["headers"],
+        assignment_id=assignment["id"],
+    )
+    submission_id = submit_response.json()["id"]
+
+    response = api.grade_submission(
+        teacher_headers=teacher_account["headers"],
+        submission_id=submission_id,
+    )
+
+    assert response.status_code == 202
+    assert solution_response.status_code == 200
+
+    with db_session_factory() as db:
+        submission = db.get(Submission, submission_id)
+        grade_result = db.query(GradeResult).filter(GradeResult.submission_id == submission_id).one_or_none()
+        assert submission is not None
+        assert submission.status == "failed_grading"
+        assert submission.error_message is not None
+        assert "批改任务异常" in submission.error_message
+        assert submission.graded_at is None
+        assert grade_result is None
+
+
 def test_manual_review_grading_preserves_per_question_result_structure(
     api,
     teacher_account,
