@@ -132,19 +132,16 @@ export interface GradeResult {
   questions: GradeQuestion[];
 }
 
-export interface GradeAllFailure {
+export interface GradeStartResponse {
   submission_id: number;
-  reason?: string;
-  detail?: string;
+  status: SubmissionStatus;
 }
 
-export interface GradeAllSummary {
+export interface GradeAllStartResponse {
   assignment_id: number;
   total: number;
-  graded: number;
-  failed: number;
+  started: number;
   skipped: number;
-  failures: GradeAllFailure[];
 }
 
 export interface StudentAssignmentStatus {
@@ -678,27 +675,25 @@ export async function fetchMyAssignmentsOverview(): Promise<StudentAssignmentOve
 
 export async function gradeSubmission(
   submissionId: number,
-): Promise<GradeResult> {
-  return requestJson<GradeResult>(
+): Promise<GradeStartResponse> {
+  return requestJson<GradeStartResponse>(
     `/submissions/${submissionId}/grade`,
     {
       method: "POST",
     },
     "teacher",
-    120_000,
   );
 }
 
 export async function gradeAllSubmissions(
   assignmentId: number,
-): Promise<GradeAllSummary> {
-  return requestJson<GradeAllSummary>(
+): Promise<GradeAllStartResponse> {
+  return requestJson<GradeAllStartResponse>(
     `/assignments/${assignmentId}/grade-all`,
     {
       method: "POST",
     },
     "teacher",
-    300_000,
   );
 }
 

@@ -39,6 +39,7 @@ function SubmissionList({ submissions, gradingIds, viewingIds, onGrade, onViewRe
           {submissions.map((s) => {
             const isGrading = gradingIds.has(s.id);
             const isViewing = viewingIds.has(s.id);
+            const isSubmissionGrading = s.status === "grading";
             return (
               <tr key={s.id}>
                 <td>{s.id}</td>
@@ -47,8 +48,8 @@ function SubmissionList({ submissions, gradingIds, viewingIds, onGrade, onViewRe
                 <td><span className={badgeClass(s.status)}>{statusLabel(s.status)}</span></td>
                 <td>
                   <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                    <button type="button" onClick={() => onGrade(s.id)} disabled={isGrading} className="btn btn-primary">
-                      {isGrading ? "批改中..." : "批改"}
+                    <button type="button" onClick={() => onGrade(s.id)} disabled={isGrading || isSubmissionGrading} className="btn btn-primary">
+                      {isGrading ? "批改中..." : isSubmissionGrading ? statusLabel(s.status) : "批改"}
                     </button>
                     <button type="button" onClick={() => onViewResult(s.id)} disabled={isViewing} className="btn btn-secondary">
                       {isViewing ? "加载中..." : "查看结果"}

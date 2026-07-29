@@ -1,6 +1,3 @@
-import type { GradeAllFailure } from "./api";
-
-
 export type MessageType = "success" | "error" | "info";
 
 export interface StatusMessage {
@@ -46,8 +43,4 @@ export const statusLabels: Record<string, string> = {
 
 export function statusLabel(status: string): string {
   return Object.prototype.hasOwnProperty.call(statusLabels, status) ? statusLabels[status] : status;
-}
-
-export function getFailureReason(failure: GradeAllFailure): string {
-  return failure.reason ?? failure.detail ?? "未知错误";
 }

@@ -10,7 +10,7 @@ import {
   type AnswerFileResponse,
   type Assignment,
   type Course,
-  type GradeAllSummary,
+  type GradeAllStartResponse,
   type GradeResult,
   type StudentAssignmentStatus,
   type StudentPublic,
@@ -109,7 +109,7 @@ export interface TeacherWorkspaceContextValue {
   submissions: Submission[];
   studentsStatus: StudentAssignmentStatus[];
   latestSolution: AnswerFileResponse | null;
-  gradeAllSummary: GradeAllSummary | null;
+  gradeAllSummary: GradeAllStartResponse | null;
   modalResult: GradeResult | null;
   isModalOpen: boolean;
   gradingIds: Set<number>;
@@ -134,7 +134,7 @@ export interface TeacherWorkspaceContextValue {
   loadAssignmentData: (assignmentId: number) => Promise<void>;
   applyBackendBaseUrl: (nextBaseUrl: string) => Promise<void>;
   uploadSolutionFile: (file: File) => Promise<AnswerFileResponse>;
-  gradeAllSelectedAssignment: () => Promise<GradeAllSummary | null>;
+  gradeAllSelectedAssignment: () => Promise<GradeAllStartResponse | null>;
   gradeSubmissionById: (submissionId: number) => Promise<void>;
   viewSubmissionResult: (submissionId: number) => Promise<void>;
   closeResultModal: () => void;
@@ -162,7 +162,7 @@ export const TeacherWorkspaceProvider: React.FC<{ children: React.ReactNode }> =
   const [studentsStatus, setStudentsStatus] = useState<StudentAssignmentStatus[]>([]);
 
   const [latestSolution, setLatestSolution] = useState<AnswerFileResponse | null>(null);
-  const [gradeAllSummary, setGradeAllSummary] = useState<GradeAllSummary | null>(null);
+  const [gradeAllSummary, setGradeAllSummary] = useState<GradeAllStartResponse | null>(null);
   const [modalResult, setModalResult] = useState<GradeResult | null>(null);
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [gradingIds, setGradingIds] = useState<Set<number>>(new Set());
@@ -304,13 +304,10 @@ export const TeacherWorkspaceProvider: React.FC<{ children: React.ReactNode }> =
       setActionMessage(null);
       setGradingIds((prev) => new Set(prev).add(submissionId));
       try {
-        const result = await gradeSubmission(submissionId);
+        await gradeSubmission(submissionId);
         setActionMessage({
           type: "success",
-          text:
-            result.status === "needs_manual_review"
-              ? `Submission ${submissionId} 自动评分完成：${result.total_score}/${result.max_total_score}，仍需人工复核`
-              : `Submission ${submissionId} 批改完成：${result.total_score}/${result.max_total_score}`,
+          text: "已发起批改，结果将在列表中自动刷新。",
         });
       } catch (error) {
         setActionMessage({ type: "error", text: getErrorMessage(error) });
@@ -362,7 +359,7 @@ export const TeacherWorkspaceProvider: React.FC<{ children: React.ReactNode }> =
       setGradeAllSummary(summary);
       setActionMessage({
         type: "success",
-        text: `批量批改完成：graded=${summary.graded}, failed=${summary.failed}`,
+        text: `已发起批量批改：${summary.started} 份提交处理中${summary.skipped ? `，跳过 ${summary.skipped} 份` : ""}。`,
       });
       await loadAssignmentData(selectedAssignmentIdState);
       return summary;

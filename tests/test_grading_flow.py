@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import grading_service
+import main
 from models import GradeQuestion, GradeResult, Submission
 
 
@@ -63,6 +65,9 @@ def test_grading_after_official_answer_returns_result_and_updates_db(
         teacher_headers=teacher_account["headers"],
         submission_id=submission_id,
     )
+    # TestClient runs BackgroundTasks to completion before .post() returns,
+    # so the background grading job has already finished by the time we
+    # fetch the result below.
     result_response = api.get_submission_result(
         teacher_headers=teacher_account["headers"],
         submission_id=submission_id,
@@ -72,8 +77,8 @@ def test_grading_after_official_answer_returns_result_and_updates_db(
     upload_solution_body = upload_solution_response.json()
     submit_body = submit_response.json()
 
-    assert grade_response.status_code == 200
-    grade_body = grade_response.json()
+    assert grade_response.status_code == 202
+    assert grade_response.json() == {"submission_id": submission_id, "status": "grading"}
     assert len(grading_stub["calls"]) == 1
     grading_call = grading_stub["calls"][0]
     assert grading_call["teacher_docx"] == upload_solution_body["file_path"]
@@ -82,26 +87,6 @@ def test_grading_after_official_answer_returns_result_and_updates_db(
     assert grading_call["submission_id"] == submission_id
     assert Path(grading_call["teacher_docx"]).exists()
     assert Path(grading_call["student_pdf"]).exists()
-
-    assert grade_body["submission_id"] == submission_id
-    assert grade_body["status"] == "graded"
-    assert grade_body["total_score"] == 1.5
-    assert grade_body["max_total_score"] == 2.0
-    assert len(grade_body["questions"]) == 2
-    assert grade_body["questions"][0] == {
-        "number": 1,
-        "is_correct": True,
-        "score": 1.0,
-        "max_score": 1.0,
-        "comment": "答案正确。",
-    }
-    assert grade_body["questions"][1] == {
-        "number": 2,
-        "is_correct": False,
-        "score": 0.5,
-        "max_score": 1.0,
-        "comment": "部分正确。",
-    }
 
     assert result_response.status_code == 200
     result_body = result_response.json()
@@ -176,8 +161,8 @@ def test_grading_failure_marks_submission_failed(
         submission_id=submission_id,
     )
 
-    assert response.status_code == 502
-    assert response.json() == {"detail": f"视觉评分失败: {error_message}"}
+    assert response.status_code == 202
+    assert response.json() == {"submission_id": submission_id, "status": "grading"}
     assert len(grading_stub["calls"]) == 1
 
     with db_session_factory() as db:
@@ -219,20 +204,9 @@ def test_manual_review_grading_preserves_per_question_result_structure(
         submission_id=submission_id,
     )
 
-    assert grade_response.status_code == 200
-    grade_body = grade_response.json()
+    assert grade_response.status_code == 202
+    assert grade_response.json() == {"submission_id": submission_id, "status": "grading"}
     assert len(grading_stub["calls"]) == 1
-    assert grade_body["submission_id"] == submission_id
-    assert grade_body["status"] == "needs_manual_review"
-    assert grade_body["total_score"] == 1.0
-    assert grade_body["max_total_score"] == 2.0
-    assert grade_body["questions"][1] == {
-        "number": 2,
-        "is_correct": None,
-        "score": None,
-        "max_score": 1.0,
-        "comment": "需要人工复核。",
-    }
 
     assert result_response.status_code == 200
     result_body = result_response.json()
@@ -316,25 +290,21 @@ def test_grade_all_summarizes_results_and_skips_already_graded_submissions(
         assignment_id=assignment["id"],
     )
 
-    assert first_run.status_code == 200
+    assert first_run.status_code == 202
     assert first_run.json() == {
         "assignment_id": assignment["id"],
         "total": 2,
-        "graded": 2,
-        "failed": 0,
+        "started": 2,
         "skipped": 0,
-        "failures": [],
     }
     assert len(grading_stub["calls"]) == 2
 
-    assert second_run.status_code == 200
+    assert second_run.status_code == 202
     assert second_run.json() == {
         "assignment_id": assignment["id"],
-        "total": 0,
-        "graded": 0,
-        "failed": 0,
+        "total": 2,
+        "started": 0,
         "skipped": 2,
-        "failures": [],
     }
     assert len(grading_stub["calls"]) == 2
 
@@ -345,3 +315,82 @@ def test_grade_all_summarizes_results_and_skips_already_graded_submissions(
         assert all(item.status == "graded" for item in submissions)
         assert all(item.graded_at is not None for item in submissions)
         assert len(grade_results) == 2
+
+
+def test_second_grade_request_after_claim_returns_409(
+    api,
+    teacher_account,
+    student_auth,
+    assignment,
+    stub_successful_grading,
+    monkeypatch,
+):
+    stub_successful_grading()
+
+    # Neuter the background job itself so the submission stays parked in
+    # GRADING after the first request. This isolates the behavior under
+    # test: the claim (UPLOADED -> GRADING) happens synchronously inside
+    # the request, before the background job is ever scheduled, so a
+    # second request is rejected by the claim guard regardless of whether
+    # (or how) the background job runs.
+    monkeypatch.setattr(main, "run_grading_job", lambda submission_id: None)
+
+    api.upload_solution(
+        teacher_headers=teacher_account["headers"],
+        assignment_id=assignment["id"],
+    )
+    upload_response = api.upload_submission_as_student(
+        student_headers=student_auth["headers"],
+        assignment_id=assignment["id"],
+    )
+    submission_id = upload_response.json()["id"]
+
+    first_response = api.grade_submission(
+        teacher_headers=teacher_account["headers"],
+        submission_id=submission_id,
+    )
+    second_response = api.grade_submission(
+        teacher_headers=teacher_account["headers"],
+        submission_id=submission_id,
+    )
+
+    assert first_response.status_code == 202
+    assert first_response.json() == {"submission_id": submission_id, "status": "grading"}
+
+    assert second_response.status_code == 409
+    assert second_response.json() == {"detail": "该提交当前状态为「grading」，无法发起批改。"}
+
+    with_submission = api.list_assignment_submissions(
+        teacher_headers=teacher_account["headers"],
+        assignment_id=assignment["id"],
+    ).json()[0]
+    assert with_submission["status"] == "grading"
+
+
+def test_reset_stuck_grading_submissions_marks_failed_with_restart_message(
+    api,
+    teacher_account,
+    student_auth,
+    assignment,
+    db_session_factory,
+):
+    upload_response = api.upload_submission_as_student(
+        student_headers=student_auth["headers"],
+        assignment_id=assignment["id"],
+    )
+    submission_id = upload_response.json()["id"]
+
+    with db_session_factory() as db:
+        submission = db.get(Submission, submission_id)
+        submission.status = "grading"
+        db.commit()
+
+    with db_session_factory() as db:
+        reset_count = grading_service.reset_stuck_grading_submissions(db)
+
+    assert reset_count == 1
+
+    with db_session_factory() as db:
+        submission = db.get(Submission, submission_id)
+        assert submission.status == "failed_grading"
+        assert submission.error_message == "服务重启导致批改中断，请重新发起批改。"

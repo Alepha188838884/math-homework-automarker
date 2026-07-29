@@ -13,17 +13,23 @@ from typing import BinaryIO, Any
 logger = logging.getLogger(__name__)
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from auth import create_access_token, decode_token, hash_password, verify_password
-from database import get_db
+from database import SessionLocal, get_db
 from models import AnswerFile, Assignment, Course, GradeResult, Student, Submission, SubmissionStatus, Teacher
-from grading_service import GRADABLE_STATUSES, grade_one_submission
+from grading_service import (
+    GRADABLE_STATUSES,
+    claim_for_grading,
+    reset_stuck_grading_submissions,
+    run_grading_batch,
+    run_grading_job,
+)
 from runtime_config import get_app_data_dir, get_cors_allow_origins, get_frontend_base_url
 from schemas import (
     AnswerFileResponse,
@@ -33,10 +39,9 @@ from schemas import (
     CourseCreate,
     CourseJoinInfo,
     CourseOut,
-    GradeAllFailure,
-    GradeAllSummary,
+    GradeAllStartResponse,
     GradeQuestionItem,
-    GradeSubmissionResponse,
+    GradeStartResponse,
     JoinLinkResponse,
     StudentAssignmentStatus,
     StudentCreate,
@@ -140,6 +145,13 @@ def initialize_app() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialize_app()
+    db = SessionLocal()
+    try:
+        reset_stuck_grading_submissions(db)
+    except SQLAlchemyError:
+        logger.warning("startup_reset_stuck_grading_submissions_skipped", exc_info=True)
+    finally:
+        db.close()
     yield
 
 
@@ -950,14 +962,23 @@ def upload_student_submission_me(
     return _create_submission_with_upload(db, assignment, current_student, file)
 
 
-@app.post("/submissions/{submission_id}/grade", response_model=GradeSubmissionResponse)
+@app.post("/submissions/{submission_id}/grade", response_model=GradeStartResponse, status_code=202)
 def grade_single_submission(
     submission_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_teacher: Teacher = Depends(get_current_teacher),
-) -> GradeSubmissionResponse:
-    _get_submission_for_teacher_or_404(db, submission_id, current_teacher)
-    return grade_one_submission(db, submission_id)
+) -> GradeStartResponse:
+    submission = _get_submission_for_teacher_or_404(db, submission_id, current_teacher)
+    assignment = submission.assignment
+    if assignment is None:
+        raise HTTPException(status_code=400, detail="Submission 未关联到有效的 assignment。")
+    if assignment.answer_file is None:
+        raise HTTPException(status_code=400, detail="该 assignment 尚未上传官方答案文件。")
+
+    claimed = claim_for_grading(db, submission_id)
+    background_tasks.add_task(run_grading_job, submission_id)
+    return GradeStartResponse(submission_id=claimed.id, status=claimed.status)
 
 
 @app.get("/assignments", response_model=list[AssignmentOut])
@@ -1089,15 +1110,18 @@ def list_my_assignments_overview(
     return overview
 
 
-@app.post("/assignments/{assignment_id}/grade-all", response_model=GradeAllSummary)
+@app.post("/assignments/{assignment_id}/grade-all", response_model=GradeAllStartResponse, status_code=202)
 def grade_all_submissions(
     assignment_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_teacher: Teacher = Depends(get_current_teacher),
-) -> GradeAllSummary:
-    _get_assignment_for_teacher_or_404(db, assignment_id, current_teacher)
+) -> GradeAllStartResponse:
+    assignment = _get_assignment_for_teacher_or_404(db, assignment_id, current_teacher)
+    if assignment.answer_file is None:
+        raise HTTPException(status_code=400, detail="该 assignment 尚未上传官方答案文件。")
 
-    all_count = int(
+    total = int(
         db.scalar(select(func.count(Submission.id)).where(Submission.assignment_id == assignment_id))
         or 0
     )
@@ -1113,29 +1137,20 @@ def grade_all_submissions(
         .all()
     )
 
-    failures: list[GradeAllFailure] = []
-    graded_count = 0
-    failed_count = 0
-
+    claimed_ids: list[int] = []
     for submission in candidates:
         try:
-            _get_submission_for_teacher_or_404(db, submission.id, current_teacher)
-            grade_one_submission(db, submission.id)
-            graded_count += 1
-        except HTTPException as exc:
-            failed_count += 1
-            failures.append(GradeAllFailure(submission_id=submission.id, detail=str(exc.detail)))
-        except Exception as exc:
-            failed_count += 1
-            failures.append(GradeAllFailure(submission_id=submission.id, detail=str(exc)))
+            claim_for_grading(db, submission.id)
+            claimed_ids.append(submission.id)
+        except HTTPException:
+            continue
 
-    return GradeAllSummary(
+    background_tasks.add_task(run_grading_batch, claimed_ids)
+    return GradeAllStartResponse(
         assignment_id=assignment_id,
-        total=len(candidates),
-        graded=graded_count,
-        failed=failed_count,
-        skipped=int(all_count) - len(candidates),
-        failures=failures,
+        total=total,
+        started=len(claimed_ids),
+        skipped=total - len(claimed_ids),
     )
 
 

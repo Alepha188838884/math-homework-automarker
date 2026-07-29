@@ -25,7 +25,6 @@ import grading_provider
 from file_processor import convert_docx_to_pdf
 from models import GradeQuestion, GradeResult, Submission, SubmissionStatus
 from runtime_config import get_app_data_dir
-from schemas import GradeQuestionItem, GradeSubmissionResponse
 from student_images import cleanup_student_tmp_images, export_student_pdf_to_images
 
 logger = logging.getLogger(__name__)
@@ -251,22 +250,6 @@ def _build_question_rows(normalized_questions: list[Any]) -> list[dict[str, Any]
     return rows
 
 
-def _rows_to_response_questions(question_rows: list[dict[str, Any]]) -> list[GradeQuestionItem]:
-    response_questions: list[GradeQuestionItem] = []
-    for row in question_rows:
-        index, score, max_score, is_correct, comment = _row_common_fields(row)
-        response_questions.append(
-            GradeQuestionItem(
-                number=index,
-                is_correct=is_correct,
-                score=score,
-                max_score=max_score,
-                comment=comment,
-            )
-        )
-    return response_questions
-
-
 def _row_common_fields(row: dict[str, Any]) -> tuple[int, float | None, float, bool | None, str]:
     return (
         int(row["index"]),
@@ -483,7 +466,7 @@ GRADABLE_STATUSES = {
 }
 
 
-def _try_claim_for_grading(db: Session, submission_id: int) -> Submission:
+def claim_for_grading(db: Session, submission_id: int) -> Submission:
     """Atomically transition a submission to GRADING status.
 
     Uses SELECT ... FOR UPDATE to prevent concurrent grade requests from
@@ -514,24 +497,31 @@ def _try_claim_for_grading(db: Session, submission_id: int) -> Submission:
     return submission
 
 
-def grade_one_submission(db: Session, submission_id: int) -> GradeSubmissionResponse:
-    # Pre-check: verify assignment and answer file exist BEFORE claiming.
-    # This avoids transitioning to GRADING when we'd immediately fail anyway.
+def grade_claimed_submission(db: Session, submission_id: int) -> None:
+    """Run grading for a submission that has already been claimed (status == GRADING).
+
+    Meant to be called from a background task with its own DB session, so
+    unlike the old synchronous flow it never raises HTTPException — all
+    failures are logged and written back to the submission row instead.
+    """
     submission_record = db.get(Submission, submission_id)
     if submission_record is None:
-        raise HTTPException(status_code=404, detail=f"Submission {submission_id} 不存在。")
-    pre_sub = _ensure_submission_instance(submission_record, "submission_record")
-    assignment = pre_sub.assignment
+        logger.error("grading_missing_submission submission_id=%s", submission_id)
+        return
+    submission_obj = _ensure_submission_instance(submission_record, "submission_record")
+
+    assignment = submission_obj.assignment
     if assignment is None:
-        raise HTTPException(status_code=400, detail="Submission 未关联到有效的 assignment。")
+        logger.error("grading_missing_assignment submission_id=%s", submission_id)
+        _set_submission_failed(db, submission_obj, SubmissionStatus.FAILED_GRADING, "Submission 未关联到有效的 assignment。")
+        return
     answer_file = assignment.answer_file
     if answer_file is None:
-        raise HTTPException(status_code=400, detail="该 assignment 尚未上传官方答案文件。")
+        logger.error("grading_missing_answer_file submission_id=%s", submission_id)
+        _set_submission_failed(db, submission_obj, SubmissionStatus.FAILED_GRADING, "该 assignment 尚未上传官方答案文件。")
+        return
 
-    # Atomically claim the submission for grading.
-    submission_obj = _try_claim_for_grading(db, submission_id)
     submission_id_value = _require_int(submission_obj.id, "submission.id")
-
     answer_file_id = _require_int(answer_file.id, "answer_file.id")
     answer_file_path = _require_str(answer_file.file_path, "answer_file.file_path")
     submission_file_path = _require_str(submission_obj.file_path, "submission.file_path")
@@ -554,7 +544,7 @@ def grade_one_submission(db: Session, submission_id: int) -> GradeSubmissionResp
     except (RuntimeError, OpenAIError, ValueError, TypeError, OSError) as exc:
         logger.error("grading_failed submission_id=%s error=%s", submission_id_value, exc)
         _set_submission_failed(db, submission_obj, SubmissionStatus.FAILED_GRADING, f"视觉评分失败: {exc}")
-        raise HTTPException(status_code=502, detail=f"视觉评分失败: {exc}") from exc
+        return
     finally:
         try:
             cleanup_student_tmp_images(submission_id_value)
@@ -580,14 +570,12 @@ def grade_one_submission(db: Session, submission_id: int) -> GradeSubmissionResp
     grade_result.total_score = total_score
     grade_result.max_total_score = max_total_score
 
-    response_questions: list[GradeQuestionItem] | None = None
     try:
         db.flush()
         grade_result_id = _require_int(grade_result.id, "grade_result.id")
         db.execute(delete(GradeQuestion).where(GradeQuestion.grade_result_id == grade_result_id))
 
         question_rows = _build_question_rows(normalized_questions)
-        response_questions = _rows_to_response_questions(question_rows)
         for row in question_rows:
             index, score, max_score, is_correct, comment = _row_common_fields(row)
             if score is None or is_correct is None:
@@ -615,12 +603,63 @@ def grade_one_submission(db: Session, submission_id: int) -> GradeSubmissionResp
         )
     except (SQLAlchemyError, RuntimeError, ValueError, TypeError) as exc:
         _set_submission_failed(db, submission_obj, SubmissionStatus.FAILED_GRADING, f"评分结果入库失败: {exc}")
-        raise HTTPException(status_code=500, detail=f"评分结果入库失败: {exc}") from exc
+        return
 
-    return GradeSubmissionResponse(
-        submission_id=submission_id_value,
-        status=_require_str(submission_obj.status, "submission.status"),
-        questions=response_questions,
-        total_score=total_score,
-        max_total_score=max_total_score,
+
+def _default_session_factory() -> Session:
+    # Resolved lazily (not bound at import time) so tests that monkeypatch
+    # the DB wiring in `database` before a background task runs are honored.
+    from database import SessionLocal
+
+    return SessionLocal()
+
+
+_session_factory: Any = _default_session_factory
+
+
+def run_grading_job(submission_id: int) -> None:
+    """Background-task entry point: grade a single already-claimed submission.
+
+    Never raises. Expected failure modes are logged and written back to the
+    DB by grade_claimed_submission itself; this is a last-resort safety net
+    for anything unexpected that escapes it, so a submission never gets
+    stuck in GRADING forever with no error surfaced to the teacher.
+    """
+    db = _session_factory()
+    try:
+        grade_claimed_submission(db, submission_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("background_grading_job_failed submission_id=%s", submission_id)
+        try:
+            db.rollback()
+            submission = db.get(Submission, submission_id)
+            if submission is not None:
+                _set_submission_failed(db, submission, SubmissionStatus.FAILED_GRADING, f"批改任务异常: {exc}")
+        except Exception:  # noqa: BLE001
+            logger.exception("background_grading_job_failed_to_record_failure submission_id=%s", submission_id)
+    finally:
+        db.close()
+
+
+def run_grading_batch(submission_ids: list[int]) -> None:
+    """Background-task entry point: grade multiple already-claimed submissions in order."""
+    for submission_id in submission_ids:
+        run_grading_job(submission_id)
+
+
+def reset_stuck_grading_submissions(db: Session) -> int:
+    """Reset any submission stuck in GRADING (e.g. after a server restart) to FAILED_GRADING."""
+    from sqlalchemy import select as sa_select
+
+    stuck = (
+        db.execute(sa_select(Submission).where(Submission.status == SubmissionStatus.GRADING))
+        .scalars()
+        .all()
     )
+    for submission in stuck:
+        submission.status = SubmissionStatus.FAILED_GRADING
+        submission.error_message = "服务重启导致批改中断，请重新发起批改。"
+    if stuck:
+        db.commit()
+        logger.info("reset_stuck_grading_submissions count=%d", len(stuck))
+    return len(stuck)

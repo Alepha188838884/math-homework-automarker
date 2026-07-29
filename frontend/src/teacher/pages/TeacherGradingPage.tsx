@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import FileUploadArea from "../../components/FileUploadArea";
 import { useTeacherWorkspace } from "../TeacherWorkspaceContext";
-import { formatDateTime, getFailureReason, isAnswerFile } from "../../utils";
+import { formatDateTime, isAnswerFile } from "../../utils";
 
 function TeacherGradingPage() {
   const {
@@ -51,18 +51,9 @@ function TeacherGradingPage() {
           <div className="summary-panel">
             <div className="summary-grid">
               <div><strong>总计:</strong> {gradeAllSummary.total}</div>
-              <div><strong>已批改:</strong> {gradeAllSummary.graded}</div>
-              <div><strong>失败:</strong> {gradeAllSummary.failed}</div>
+              <div><strong>已发起:</strong> {gradeAllSummary.started}</div>
               <div><strong>跳过:</strong> {gradeAllSummary.skipped}</div>
             </div>
-            {gradeAllSummary.failures.length > 0 && (
-              <div style={{ marginTop: "10px" }}>
-                <strong>失败详情:</strong>
-                <ul style={{ margin: "8px 0 0", paddingLeft: "20px" }}>
-                  {gradeAllSummary.failures.map((f) => <li key={f.submission_id}>#{f.submission_id}: {getFailureReason(f)}</li>)}
-                </ul>
-              </div>
-            )}
           </div>
         )}
       </section>

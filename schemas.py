@@ -235,12 +235,9 @@ class GradeQuestionItem(BaseModel):
     comment: str | None = None
 
 
-class GradeSubmissionResponse(BaseModel):
+class GradeStartResponse(BaseModel):
     submission_id: int
     status: str
-    questions: list[GradeQuestionItem]
-    total_score: float
-    max_total_score: float
 
 
 class SubmissionResultResponse(BaseModel):
@@ -253,15 +250,8 @@ class SubmissionResultResponse(BaseModel):
     max_total_score: float
 
 
-class GradeAllFailure(BaseModel):
-    submission_id: int
-    detail: str
-
-
-class GradeAllSummary(BaseModel):
+class GradeAllStartResponse(BaseModel):
     assignment_id: int
     total: int
-    graded: int
-    failed: int
+    started: int
     skipped: int
-    failures: list[GradeAllFailure]

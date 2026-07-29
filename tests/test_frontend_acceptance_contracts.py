@@ -266,7 +266,7 @@ def test_frontend_teacher_submission_views_see_uploaded_then_graded_state(
         teacher_headers=teacher_account["headers"],
         submission_id=submission_id,
     )
-    assert grade_response.status_code == 200
+    assert grade_response.status_code == 202
 
     after_list_response = api.list_assignment_submissions(
         teacher_headers=teacher_account["headers"],
@@ -342,7 +342,7 @@ def test_frontend_student_assignment_overview_contract_tracks_manual_review_stat
         teacher_headers=teacher_account["headers"],
         submission_id=submission_id,
     )
-    assert grade_response.status_code == 200
+    assert grade_response.status_code == 202
 
     after_response = api.list_student_overview(student_headers=student_auth["headers"])
     assert after_response.status_code == 200
@@ -385,27 +385,19 @@ def test_frontend_grade_and_result_contracts_match_modal_and_workspace_usage(
         teacher_headers=teacher_account["headers"],
         submission_id=submission_id,
     )
+    # TestClient runs BackgroundTasks to completion before .post() returns,
+    # so the background grading job has already finished by the time we
+    # fetch the result below.
     result_response = api.get_submission_result(
         teacher_headers=teacher_account["headers"],
         submission_id=submission_id,
     )
 
-    assert grade_response.status_code == 200
+    assert grade_response.status_code == 202
     grade_body = grade_response.json()
-    assert_exact_keys(
-        grade_body,
-        {"submission_id", "status", "questions", "total_score", "max_total_score"},
-    )
+    assert_exact_keys(grade_body, {"submission_id", "status"})
     assert grade_body["submission_id"] == submission_id
-    assert grade_body["status"] == "needs_manual_review"
-    assert_number(grade_body["total_score"])
-    assert_number(grade_body["max_total_score"])
-    assert isinstance(grade_body["questions"], list)
-    assert len(grade_body["questions"]) == 2
-    assert "model_name" not in grade_body
-    assert "graded_at" not in grade_body
-    assert_grade_question_shape(grade_body["questions"][0], nullable_result=False)
-    assert_grade_question_shape(grade_body["questions"][1], nullable_result=True)
+    assert grade_body["status"] == "grading"
 
     assert result_response.status_code == 200
     result_body = result_response.json()
@@ -418,15 +410,12 @@ def test_frontend_grade_and_result_contracts_match_modal_and_workspace_usage(
     assert isinstance(result_body["model_name"], str)
     assert result_body["model_name"]
     assert_iso_datetime(result_body["graded_at"])
-    assert result_body["total_score"] == grade_body["total_score"]
-    assert result_body["max_total_score"] == grade_body["max_total_score"]
-    assert len(result_body["questions"]) == len(grade_body["questions"])
+    assert_number(result_body["total_score"])
+    assert_number(result_body["max_total_score"])
+    assert isinstance(result_body["questions"], list)
+    assert len(result_body["questions"]) == 2
     for index, question in enumerate(result_body["questions"]):
         assert_grade_question_shape(question, nullable_result=index == 1)
-        assert question["number"] == grade_body["questions"][index]["number"]
-        assert question["is_correct"] == grade_body["questions"][index]["is_correct"]
-        assert question["score"] == grade_body["questions"][index]["score"]
-        assert question["max_score"] == grade_body["questions"][index]["max_score"]
         assert isinstance(question["comment"], str)
         assert question["comment"].startswith(f"[Q{index + 1}] ")
 

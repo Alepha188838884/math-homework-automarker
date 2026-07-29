@@ -247,7 +247,7 @@ def test_teacher_can_upload_submission_for_student_and_students_status_tracks_pr
         teacher_headers=teacher_account["headers"],
         submission_id=upload_body["id"],
     )
-    assert grade_response.status_code == 200
+    assert grade_response.status_code == 202
 
     graded_status_response = api.list_assignment_student_status(
         teacher_headers=teacher_account["headers"],

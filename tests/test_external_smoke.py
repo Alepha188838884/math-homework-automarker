@@ -93,17 +93,28 @@ def test_real_doubao_end_to_end_smoke(
         submission_id=submission_id,
     )
     _maybe_skip_external_instability(grade_response, stage="vision grading")
-    assert grade_response.status_code == 200
+    assert grade_response.status_code == 202
 
     grade_body = grade_response.json()
     assert grade_body["submission_id"] == submission_id
-    assert grade_body["status"] in {"graded", "needs_manual_review"}
-    assert isinstance(grade_body["questions"], list)
-    assert grade_body["questions"]
-    assert isinstance(grade_body["total_score"], (int, float))
-    assert isinstance(grade_body["max_total_score"], (int, float))
+    assert grade_body["status"] == "grading"
 
-    first_question = grade_body["questions"][0]
+    # TestClient runs BackgroundTasks to completion before .post() returns,
+    # so the real vision-model grading has already finished by this point.
+    result_response = api.get_submission_result(
+        teacher_headers=teacher_account["headers"],
+        submission_id=submission_id,
+    )
+    _maybe_skip_external_instability(result_response, stage="result fetch")
+    assert result_response.status_code == 200
+    result_body = result_response.json()
+    assert result_body["status"] in {"graded", "needs_manual_review"}
+    assert isinstance(result_body["questions"], list)
+    assert result_body["questions"]
+    assert isinstance(result_body["total_score"], (int, float))
+    assert isinstance(result_body["max_total_score"], (int, float))
+
+    first_question = result_body["questions"][0]
     assert set(first_question) == {"number", "is_correct", "score", "max_score", "comment"}
     assert isinstance(first_question["number"], int)
     assert first_question["is_correct"] is None or isinstance(first_question["is_correct"], bool)
@@ -111,30 +122,11 @@ def test_real_doubao_end_to_end_smoke(
     assert isinstance(first_question["max_score"], (int, float))
     assert isinstance(first_question["comment"], str)
 
-    result_response = api.get_submission_result(
-        teacher_headers=teacher_account["headers"],
-        submission_id=submission_id,
-    )
-    assert result_response.status_code == 200
-    assert result_response.json()["status"] == grade_body["status"]
-    result_questions = result_response.json()["questions"]
-    assert isinstance(result_questions, list)
-    assert len(result_questions) == len(grade_body["questions"])
-    for index, result_question in enumerate(result_questions):
-        grade_question = grade_body["questions"][index]
-        assert set(result_question) == {"number", "is_correct", "score", "max_score", "comment"}
-        assert result_question["number"] == grade_question["number"]
-        assert result_question["is_correct"] == grade_question["is_correct"]
-        assert result_question["score"] == grade_question["score"]
-        assert result_question["max_score"] == grade_question["max_score"]
-        assert isinstance(result_question["comment"], str)
-        assert result_question["comment"].endswith(str(grade_question["comment"]))
-
     with db_session_factory() as db:
         submission = db.get(Submission, submission_id)
         grade_result = db.query(GradeResult).filter(GradeResult.submission_id == submission_id).one_or_none()
         assert submission is not None
-        assert submission.status == grade_body["status"]
+        assert submission.status == result_body["status"]
         assert submission.error_message is None
         assert grade_result is not None
         assert grade_result.model_name.startswith("vision:doubao:")

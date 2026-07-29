@@ -169,10 +169,11 @@ def test_empty_pdf_upload_is_saved_but_fails_during_local_preprocessing(
     assert solution_response.status_code == 200
     assert upload_response.status_code == 201
     assert Path(upload_response.json()["file_path"]).stat().st_size == 0
-    assert grade_response.status_code == 502
-    assert grade_response.json() == {
-        "detail": "视觉评分失败: 学生提交 PDF 文件无效，请检查文件是否为有效且非空的 PDF。"
-    }
+    # TestClient runs BackgroundTasks to completion before .post() returns, so
+    # the request itself only reports that grading was started; the failure
+    # is written back to the submission row by the background job.
+    assert grade_response.status_code == 202
+    assert grade_response.json() == {"submission_id": submission_id, "status": "grading"}
 
     with db_session_factory() as db:
         submission = db.get(Submission, submission_id)
@@ -252,10 +253,8 @@ def test_empty_docx_upload_fails_with_standardized_http_error(
 
     assert solution_response.status_code == 200
     assert upload_response.status_code == 201
-    assert grade_response.status_code == 502
-    assert grade_response.json() == {
-        "detail": "视觉评分失败: 老师答案 Word 文件无效，请检查文件是否为有效且非空的 .docx。"
-    }
+    assert grade_response.status_code == 202
+    assert grade_response.json() == {"submission_id": submission_id, "status": "grading"}
 
     with db_session_factory() as db:
         submission = db.get(Submission, submission_id)
@@ -360,7 +359,7 @@ def test_offline_grade_route_runs_real_local_preprocessing_before_model_stub(
         submission_id=submission_id,
     )
 
-    assert grade_response.status_code == 200
+    assert grade_response.status_code == 202
     assert result_response.status_code == 200
     assert len(recorded_calls) == 1
     recorded = recorded_calls[0]
