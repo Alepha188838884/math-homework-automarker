@@ -570,6 +570,11 @@ def _require_password_match(plain_password: str, password_hash: str) -> None:
         raise _unauthorized("邮箱或密码错误。")
 
 
+def _require_min_password_length(password: str) -> None:
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="密码至少 8 位。")
+
+
 def _build_teacher_login_response(teacher: Teacher) -> TeacherLoginResponse:
     token = create_access_token({"sub": str(teacher.id), "role": "teacher"})
     logger.info("auth_success role=teacher teacher_id=%s", teacher.id)
@@ -798,6 +803,7 @@ def bootstrap_teacher(
     if teacher_count > 0:
         raise HTTPException(status_code=400, detail="系统已存在老师账号，bootstrap 已关闭。")
 
+    _require_min_password_length(payload.password)
     _check_teacher_signup_code(payload.signup_code)
 
     teacher = _create_teacher_account(
@@ -838,6 +844,7 @@ def teacher_entry(
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="新账号注册需要提供 name。")
+    _require_min_password_length(payload.password)
 
     _check_teacher_signup_code(payload.signup_code)
 
@@ -879,6 +886,7 @@ def student_entry(
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="新账号注册需要提供 name。")
+    _require_min_password_length(payload.password)
     course_id = _resolve_course_id_for_student_signup(db, payload.assignment_id)
 
     student = _create_student_account(

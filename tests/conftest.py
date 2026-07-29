@@ -230,6 +230,21 @@ class ApiHelper:
             json={"email": email, "password": password},
         )
 
+    def student_entry(
+        self,
+        *,
+        name: str | None = None,
+        email: str,
+        password: str = "pw123456",
+        assignment_id: int | None = None,
+    ):
+        payload: dict[str, Any] = {"email": email, "password": password}
+        if name is not None:
+            payload["name"] = name
+        if assignment_id is not None:
+            payload["assignment_id"] = assignment_id
+        return self.client.post("/auth/student/entry", json=payload)
+
     def create_course(self, *, teacher_headers: dict[str, str], name: str = "七年级数学"):
         return self.client.post(
             "/teachers/me/courses",

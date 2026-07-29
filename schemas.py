@@ -120,7 +120,7 @@ class StudentCreate(BaseModel):
 class StudentJoinRequest(BaseModel):
     name: str
     email: EmailStr
-    password: str
+    password: str = Field(min_length=8)
 
 
 class StudentJoinResponse(BaseModel):

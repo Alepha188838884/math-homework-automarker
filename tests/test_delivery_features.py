@@ -582,3 +582,52 @@ def test_reset_password_too_short_returns_422(
         new_password="short12",
     )
     assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Feature 6: password minimum length enforced at every registration entry point
+# ---------------------------------------------------------------------------
+
+
+def test_join_link_registration_too_short_password_returns_422(api, teacher_account, course):
+    join_response = api.generate_join_link(teacher_headers=teacher_account["headers"], course_id=course["id"])
+    assert join_response.status_code == 200
+    join_token = join_response.json()["join_token"]
+
+    response = api.register_via_join_link(
+        join_token=join_token,
+        name="Short Pw Student",
+        email="short-join@example.com",
+        password="short1",
+    )
+    assert response.status_code == 422
+
+
+def test_student_entry_new_account_too_short_password_returns_400(api, course):
+    response = api.student_entry(name="New Student", email="short-student-entry@example.com", password="short1")
+    assert response.status_code == 400
+    assert response.json() == {"detail": "密码至少 8 位。"}
+
+
+def test_student_entry_login_branch_unaffected_by_password_length_check(api, student_account):
+    response = api.student_entry(email=student_account["email"], password="short1")
+    assert response.status_code == 401
+    assert response.json() == {"detail": "邮箱或密码错误。"}
+
+
+def test_teacher_entry_new_account_too_short_password_returns_400(api, teacher_account):
+    response = api.teacher_entry(name="New Teacher Short Pw", email="short-teacher-entry@example.com", password="short1")
+    assert response.status_code == 400
+    assert response.json() == {"detail": "密码至少 8 位。"}
+
+
+def test_teacher_entry_login_branch_unaffected_by_password_length_check(api, teacher_account):
+    response = api.teacher_entry(name="Test Teacher", email=teacher_account["email"], password="short1")
+    assert response.status_code == 401
+    assert response.json() == {"detail": "邮箱或密码错误。"}
+
+
+def test_bootstrap_teacher_too_short_password_returns_400(api):
+    response = api.bootstrap_teacher(email="short-boot@example.com", password="short1")
+    assert response.status_code == 400
+    assert response.json() == {"detail": "密码至少 8 位。"}
