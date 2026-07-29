@@ -205,6 +205,7 @@ export const TeacherWorkspaceProvider: React.FC<{ children: React.ReactNode }> =
     setGradingIds(new Set());
     setViewingIds(new Set());
     setSolutionMessage(null);
+    setActionMessage(null);
   }, []);
 
   const loadCourses = useCallback(async () => {
@@ -380,10 +381,10 @@ export const TeacherWorkspaceProvider: React.FC<{ children: React.ReactNode }> =
       setActionMessage(null);
       try {
         await deleteAssignment(assignmentId);
-        setActionMessage({ type: "success", text: "作业已删除。" });
         if (selectedCourseIdState !== null) {
           await loadAssignmentsForCourse(selectedCourseIdState);
         }
+        setActionMessage({ type: "success", text: "作业已删除。" });
       } catch (error) {
         setActionMessage({ type: "error", text: getErrorMessage(error) });
       }
@@ -395,8 +396,8 @@ export const TeacherWorkspaceProvider: React.FC<{ children: React.ReactNode }> =
     setActionMessage(null);
     try {
       await deleteCourse(courseId);
-      setActionMessage({ type: "success", text: "班级已删除。" });
       await loadCourses();
+      setActionMessage({ type: "success", text: "班级已删除。" });
     } catch (error) {
       setActionMessage({ type: "error", text: getErrorMessage(error) });
     }

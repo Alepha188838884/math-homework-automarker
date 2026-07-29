@@ -87,7 +87,8 @@ function StudentUploadPage() {
       setResultData(data);
       setResultModalOpen(true);
     } catch (error) {
-      setMessage({ type: "error", text: getErrorMessage(error) });
+      const message = getErrorMessage(error);
+      setMessage({ type: "error", text: message.includes("HTTP 404") ? "该提交暂无批改结果。" : message });
     } finally {
       setIsLoadingResult(false);
     }

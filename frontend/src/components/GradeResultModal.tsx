@@ -61,7 +61,7 @@ function GradeResultModal({ isOpen, result, onClose, editable, onSaveQuestion }:
       setIsSaving(true);
       setSaveError(null);
       try {
-        await onSaveQuestion(q.number, { score: parsed, is_correct: draftIsCorrect, comment: draftComment.trim() || undefined });
+        await onSaveQuestion(q.number, { score: parsed, is_correct: draftIsCorrect, comment: draftComment.trim() });
         setEditingNumber(null);
       } catch (error) {
         setSaveError(error instanceof Error ? error.message : "保存失败，请重试。");
