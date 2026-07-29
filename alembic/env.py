@@ -4,7 +4,7 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
-from db import Base
+from db import Base, normalize_database_url
 import models  # noqa: F401
 
 # this is the Alembic Config object, which provides
@@ -16,6 +16,7 @@ if not database_url:
     raise RuntimeError(
         "DATABASE_URL is not set. Please export DATABASE_URL before running Alembic commands."
     )
+database_url = normalize_database_url(database_url)
 
 config.set_main_option("sqlalchemy.url", database_url)
 

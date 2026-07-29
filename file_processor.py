@@ -49,11 +49,31 @@ def convert_docx_to_pdf(docx_path: str, output_dir: str) -> str:
     soffice = find_soffice()
     os.makedirs(output_dir, exist_ok=True)
 
-    subprocess.run(
-        [soffice, "--headless", "--convert-to", "pdf", "--outdir", output_dir, docx_path],
-        check=True,
-        timeout=60,
-    )
+    # Each call gets its own LibreOffice user profile directory. Without this,
+    # concurrent conversions (e.g. multiple BackgroundTasks grading jobs at
+    # once) share the default profile and can lock each other out.
+    profile_dir = tempfile.mkdtemp(prefix="soffice_profile_")
+    try:
+        subprocess.run(
+            [
+                soffice,
+                "--headless",
+                f"-env:UserInstallation=file://{profile_dir}",
+                "--convert-to",
+                "pdf",
+                "--outdir",
+                output_dir,
+                docx_path,
+            ],
+            check=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"LibreOffice 转换超时: {exc}") from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"LibreOffice 转换失败: {exc}") from exc
+    finally:
+        shutil.rmtree(profile_dir, ignore_errors=True)
 
     pdf_path = os.path.join(output_dir, f"{Path(docx_path).stem}.pdf")
     if not os.path.isfile(pdf_path):

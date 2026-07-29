@@ -149,7 +149,8 @@ for any path so the SPA router can take over.
 3. During the initial Blueprint creation flow, fill in the `sync: false` secrets:
    - `ARK_API_KEY`
    - `DASHSCOPE_API_KEY` (optional, only if you plan to use the `qwen` fallback)
-4. Confirm the backend plan remains `starter` (required for `preDeployCommand`)
+4. Confirm the backend plan remains `starter` — `preDeployCommand` requires a
+   paid web service plan, and `starter` is the cheapest one that qualifies —
    and the Docker build completes — the first build is slower than a plain
    Python build because it installs LibreOffice and CJK fonts.
 5. Wait for both services (backend, frontend) to finish deploying.

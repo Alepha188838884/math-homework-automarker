@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import fitz
+import file_processor
 import grading_provider
 import grading_service
 import pytest
@@ -502,3 +504,54 @@ def test_export_student_pdf_to_images_rejects_empty_pdf(local_processing_roots):
             23,
             str(fixture_path("empty_upload.pdf")),
         )
+
+
+def test_convert_docx_to_pdf_uses_isolated_user_profile_per_call(tmp_path, monkeypatch):
+    recorded_calls: list[list[str]] = []
+
+    def fake_run(cmd, check, timeout):
+        recorded_calls.append(cmd)
+        docx_path = Path(cmd[-1])
+        output_dir = Path(cmd[cmd.index("--outdir") + 1])
+        (output_dir / f"{docx_path.stem}.pdf").write_bytes(b"%PDF-1.4 stub")
+
+    monkeypatch.setattr(file_processor, "find_soffice", lambda: "/usr/bin/soffice")
+    monkeypatch.setattr(file_processor.subprocess, "run", fake_run)
+
+    docx_path = tmp_path / "answer.docx"
+    docx_path.write_bytes(b"stub docx")
+    output_dir = tmp_path / "out"
+
+    pdf_path = file_processor.convert_docx_to_pdf(str(docx_path), str(output_dir))
+
+    assert Path(pdf_path).exists()
+    assert len(recorded_calls) == 1
+    assert any(arg.startswith("-env:UserInstallation=") for arg in recorded_calls[0])
+
+
+def test_convert_docx_to_pdf_wraps_called_process_error_as_runtime_error(tmp_path, monkeypatch):
+    def fake_run(cmd, check, timeout):
+        raise subprocess.CalledProcessError(returncode=1, cmd=cmd)
+
+    monkeypatch.setattr(file_processor, "find_soffice", lambda: "/usr/bin/soffice")
+    monkeypatch.setattr(file_processor.subprocess, "run", fake_run)
+
+    docx_path = tmp_path / "answer.docx"
+    docx_path.write_bytes(b"stub docx")
+
+    with pytest.raises(RuntimeError, match="LibreOffice 转换失败"):
+        file_processor.convert_docx_to_pdf(str(docx_path), str(tmp_path / "out"))
+
+
+def test_convert_docx_to_pdf_wraps_timeout_expired_as_runtime_error(tmp_path, monkeypatch):
+    def fake_run(cmd, check, timeout):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
+
+    monkeypatch.setattr(file_processor, "find_soffice", lambda: "/usr/bin/soffice")
+    monkeypatch.setattr(file_processor.subprocess, "run", fake_run)
+
+    docx_path = tmp_path / "answer.docx"
+    docx_path.write_bytes(b"stub docx")
+
+    with pytest.raises(RuntimeError, match="LibreOffice 转换超时"):
+        file_processor.convert_docx_to_pdf(str(docx_path), str(tmp_path / "out"))
