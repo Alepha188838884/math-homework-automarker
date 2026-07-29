@@ -1,0 +1,16 @@
+.git
+frontend/
+tests/
+docs/
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+.claude/
+.idea/
+data/
+*.pdf
+*.docx
+*.md
+.env*
+node_modules

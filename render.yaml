@@ -1,12 +1,11 @@
 services:
   - type: web
-    runtime: python
+    runtime: docker
     name: mathhomeworkautomarker-backend
     plan: starter
     region: singapore
-    buildCommand: pip install -r requirements.txt
+    dockerfilePath: ./Dockerfile
     preDeployCommand: alembic upgrade head
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips '*'
     healthCheckPath: /health
     disk:
       name: data
@@ -21,12 +20,31 @@ services:
           property: connectionString
       - key: AUTH_SECRET_KEY
         generateValue: true
+      - key: GRADING_PROVIDER
+        value: doubao
+      - key: DOUBAO_VISION_MODEL
+        value: doubao-seed-2-1-turbo-260628
+      - key: ARK_API_KEY
+        sync: false
       - key: DASHSCOPE_API_KEY
         sync: false
       - key: FRONTEND_BASE_URL
-        sync: false
+        value: https://mathhomeworkautomarker-frontend.onrender.com
       - key: CORS_ALLOW_ORIGINS
-        sync: false
+        value: https://mathhomeworkautomarker-frontend.onrender.com
+
+  - type: web
+    runtime: static
+    name: mathhomeworkautomarker-frontend
+    buildCommand: cd frontend && npm ci && npm run build
+    staticPublishPath: frontend/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://mathhomeworkautomarker-backend.onrender.com
 
 databases:
   - name: mathhomeworkautomarker-db
