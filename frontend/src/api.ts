@@ -132,6 +132,12 @@ export interface GradeResult {
   questions: GradeQuestion[];
 }
 
+export interface QuestionOverridePayload {
+  score: number;
+  is_correct: boolean;
+  comment?: string;
+}
+
 export interface GradeStartResponse {
   submission_id: number;
   status: SubmissionStatus;
@@ -311,12 +317,12 @@ function buildAuthHeaders(authRole: AuthRole): HeadersInit {
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
-async function requestJson<T>(
+async function sendRequest(
   path: string,
   init: RequestInit,
   authRole: AuthRole = "none",
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
-): Promise<T> {
+): Promise<Response> {
   const mergedHeaders: HeadersInit = {
     ...buildAuthHeaders(authRole),
     ...(init.headers ?? {}),
@@ -360,11 +366,30 @@ async function requestJson<T>(
     throw new Error(`HTTP ${response.status}: ${message}`);
   }
 
+  return response;
+}
+
+async function requestJson<T>(
+  path: string,
+  init: RequestInit,
+  authRole: AuthRole = "none",
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<T> {
+  const response = await sendRequest(path, init, authRole, timeoutMs);
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
     throw new Error("Server did not return JSON.");
   }
   return (await response.json()) as T;
+}
+
+async function requestVoid(
+  path: string,
+  init: RequestInit,
+  authRole: AuthRole = "none",
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<void> {
+  await sendRequest(path, init, authRole, timeoutMs);
 }
 
 export async function bootstrapTeacher(
@@ -402,13 +427,14 @@ export async function teacherEntry(
   email: string,
   password: string,
   name?: string,
+  signupCode?: string,
 ): Promise<TeacherLoginResponse> {
   return requestJson<TeacherLoginResponse>(
     "/auth/teacher/entry",
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password, name }),
+      body: JSON.stringify({ email, password, name, signup_code: signupCode }),
     },
     "none",
   );
@@ -478,6 +504,10 @@ export async function createCourse(
   );
 }
 
+export async function deleteCourse(courseId: number): Promise<void> {
+  return requestVoid(`/courses/${courseId}`, { method: "DELETE" }, "teacher");
+}
+
 export async function generateCourseJoinLink(courseId: number): Promise<JoinLinkResponse> {
   return requestJson<JoinLinkResponse>(
     `/courses/${courseId}/join-link`,
@@ -542,6 +572,26 @@ export async function createStudent(
   );
 }
 
+export async function deleteCourseStudent(courseId: number, studentId: number): Promise<void> {
+  return requestVoid(`/courses/${courseId}/students/${studentId}`, { method: "DELETE" }, "teacher");
+}
+
+export async function resetStudentPassword(
+  courseId: number,
+  studentId: number,
+  newPassword: string,
+): Promise<{ detail: string }> {
+  return requestJson<{ detail: string }>(
+    `/courses/${courseId}/students/${studentId}/password`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ new_password: newPassword }),
+    },
+    "teacher",
+  );
+}
+
 export async function createAssignment(
   courseId: number,
   payload: {
@@ -582,6 +632,10 @@ export async function fetchAssignments(): Promise<Assignment[]> {
     },
     "teacher",
   );
+}
+
+export async function deleteAssignment(assignmentId: number): Promise<void> {
+  return requestVoid(`/assignments/${assignmentId}`, { method: "DELETE" }, "teacher");
 }
 
 export async function fetchSubmissionsForAssignment(
@@ -673,6 +727,14 @@ export async function fetchMyAssignmentsOverview(): Promise<StudentAssignmentOve
   );
 }
 
+export async function fetchMySubmissionResult(submissionId: number): Promise<GradeResult> {
+  return requestJson<GradeResult>(
+    `/students/me/submissions/${submissionId}/result`,
+    { method: "GET" },
+    "student",
+  );
+}
+
 export async function gradeSubmission(
   submissionId: number,
 ): Promise<GradeStartResponse> {
@@ -704,6 +766,22 @@ export async function fetchSubmissionResult(
     `/submissions/${submissionId}/result`,
     {
       method: "GET",
+    },
+    "teacher",
+  );
+}
+
+export async function updateQuestionGrade(
+  submissionId: number,
+  questionNumber: number,
+  payload: QuestionOverridePayload,
+): Promise<GradeResult> {
+  return requestJson<GradeResult>(
+    `/submissions/${submissionId}/questions/${questionNumber}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     },
     "teacher",
   );

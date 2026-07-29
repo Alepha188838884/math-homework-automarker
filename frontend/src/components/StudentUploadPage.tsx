@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { fetchMyAssignmentsOverview, type StudentAssignmentOverview, uploadSubmissionForMe } from "../api";
+import { fetchMyAssignmentsOverview, fetchMySubmissionResult, type GradeResult, type StudentAssignmentOverview, uploadSubmissionForMe } from "../api";
 import { useStudentAuth } from "../auth/StudentAuthContext";
 import { formatDateTime, getErrorMessage, isPdfFile, statusLabels, type StatusMessage } from "../utils";
 import FileUploadArea from "./FileUploadArea";
+import GradeResultModal from "./GradeResultModal";
 
 function buildStatusText(item: StudentAssignmentOverview): string {
   if (!item.has_submitted) return "未提交";
@@ -30,6 +31,9 @@ function StudentUploadPage() {
   const [isLoadingAssignments, setIsLoadingAssignments] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [message, setMessage] = useState<StatusMessage | null>(null);
+  const [resultModalOpen, setResultModalOpen] = useState(false);
+  const [resultData, setResultData] = useState<GradeResult | null>(null);
+  const [isLoadingResult, setIsLoadingResult] = useState(false);
 
   const loadAssignmentsOverview = useCallback(async (preferredId?: number | null) => {
     setIsLoadingAssignments(true);
@@ -75,7 +79,22 @@ function StudentUploadPage() {
     }
   };
 
+  const handleViewResult = async (submissionId: number) => {
+    setMessage(null);
+    setIsLoadingResult(true);
+    try {
+      const data = await fetchMySubmissionResult(submissionId);
+      setResultData(data);
+      setResultModalOpen(true);
+    } catch (error) {
+      setMessage({ type: "error", text: getErrorMessage(error) });
+    } finally {
+      setIsLoadingResult(false);
+    }
+  };
+
   return (
+    <>
     <section className="card">
       <div className="workspace-header">
         <div>
@@ -123,9 +142,16 @@ function StudentUploadPage() {
                     <td>{formatDateTime(item.created_at)}</td>
                     <td>{buildStatusText(item)}</td>
                     <td>
-                      <button type="button" className="btn btn-primary" onClick={() => { setActiveAssignmentId(item.assignment_id); setMessage(null); }}>
-                        {item.has_submitted ? "重新提交" : "提交作业"}
-                      </button>
+                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                        <button type="button" className="btn btn-primary" onClick={() => { setActiveAssignmentId(item.assignment_id); setMessage(null); }}>
+                          {item.has_submitted ? "重新提交" : "提交作业"}
+                        </button>
+                        {(item.submission_status === "graded" || item.submission_status === "needs_manual_review") && item.submission_id && (
+                          <button type="button" className="btn btn-secondary" disabled={isLoadingResult} onClick={() => void handleViewResult(item.submission_id!)}>
+                            查看批改详情
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -151,6 +177,8 @@ function StudentUploadPage() {
 
       {message && <div className={`alert alert-${message.type}`} style={{ marginTop: "14px" }}>{message.text}</div>}
     </section>
+    <GradeResultModal isOpen={resultModalOpen} result={resultData} onClose={() => setResultModalOpen(false)} />
+    </>
   );
 }
 

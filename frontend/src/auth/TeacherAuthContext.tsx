@@ -13,6 +13,7 @@ interface TeacherLoginParams {
   email: string;
   password: string;
   name?: string;
+  signupCode?: string;
   rememberMe: boolean;
 }
 
@@ -101,6 +102,7 @@ export const TeacherAuthProvider: React.FC<{ children: React.ReactNode }> = ({ c
       params.email.trim(),
       params.password,
       params.name?.trim() || undefined,
+      params.signupCode?.trim() || undefined,
     );
     const nextExpiresAt = computeExpiresAt(response.access_token);
     saveTeacherSession<TeacherPublic>({

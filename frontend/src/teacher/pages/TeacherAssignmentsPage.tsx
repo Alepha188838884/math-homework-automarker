@@ -7,6 +7,7 @@ function TeacherAssignmentsPage() {
   const {
     selectedCourseId, selectedAssignmentId, setSelectedAssignmentId,
     courseAssignments, assignmentsError, isLoadingAssignments, loadAssignmentsForCourse,
+    deleteAssignmentById, actionMessage,
   } = useTeacherWorkspace();
 
   const [title, setTitle] = useState("");
@@ -36,6 +37,12 @@ function TeacherAssignmentsPage() {
       setMessage({ type: "success", text: "作业创建成功。" });
     } catch (error) { setMessage({ type: "error", text: getErrorMessage(error) }); }
     finally { setIsCreating(false); }
+  };
+
+  const handleDeleteAssignment = (assignmentId: number) => {
+    if (window.confirm("删除作业将同时删除全部提交与批改结果，且不可恢复。确定删除？")) {
+      void deleteAssignmentById(assignmentId);
+    }
   };
 
   return (
@@ -69,10 +76,13 @@ function TeacherAssignmentsPage() {
                 ) : (
                   <div className="table-wrap">
                     <table className="data-table">
-                      <thead><tr><th>ID</th><th>标题</th><th>截止日期</th><th>满分</th><th>创建时间</th></tr></thead>
+                      <thead><tr><th>ID</th><th>标题</th><th>截止日期</th><th>满分</th><th>创建时间</th><th>操作</th></tr></thead>
                       <tbody>
                         {courseAssignments.map((a) => (
-                          <tr key={a.id}><td>{a.id}</td><td>{a.title}</td><td>{formatDateTime(a.due_date)}</td><td>{a.max_score ?? "-"}</td><td>{formatDateTime(a.created_at)}</td></tr>
+                          <tr key={a.id}>
+                            <td>{a.id}</td><td>{a.title}</td><td>{formatDateTime(a.due_date)}</td><td>{a.max_score ?? "-"}</td><td>{formatDateTime(a.created_at)}</td>
+                            <td><button type="button" className="btn btn-danger" onClick={() => handleDeleteAssignment(a.id)}>删除</button></td>
+                          </tr>
                         ))}
                       </tbody>
                     </table>
@@ -95,6 +105,7 @@ function TeacherAssignmentsPage() {
           </div>
         </div>
         {message && <div className={`alert alert-${message.type}`} style={{ marginTop: "12px" }}>{message.text}</div>}
+        {actionMessage && <div className={`alert alert-${actionMessage.type}`} style={{ marginTop: "12px" }}>{actionMessage.text}</div>}
       </section>
     </div>
   );

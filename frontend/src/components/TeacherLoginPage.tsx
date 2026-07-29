@@ -8,6 +8,7 @@ function TeacherLoginPage() {
   const { ready, isAuthenticated, loginTeacher } = useTeacherAuth();
 
   const [name, setName] = useState("");
+  const [signupCode, setSignupCode] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(true);
@@ -23,7 +24,7 @@ function TeacherLoginPage() {
     setMessage("");
     try {
       setIsLoading(true);
-      await loginTeacher({ email: email.trim(), password, name: name.trim() || undefined, rememberMe });
+      await loginTeacher({ email: email.trim(), password, name: name.trim() || undefined, signupCode: signupCode.trim() || undefined, rememberMe });
       navigate("/teacher", { replace: true });
     } catch (error) {
       setMessage(getErrorMessage(error));
@@ -43,6 +44,12 @@ function TeacherLoginPage() {
           <span className="form-label">姓名（新账号必填）</span>
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} className="form-input" placeholder="首次注册时填写" />
         </label>
+        {name.trim() && (
+          <label className="form-group">
+            <span className="form-label">邀请码（如老师提供，选填）</span>
+            <input type="text" value={signupCode} onChange={(e) => setSignupCode(e.target.value)} className="form-input" placeholder="仅新注册教师账号需要" />
+          </label>
+        )}
         <label className="form-group">
           <span className="form-label">邮箱</span>
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className="form-input" />

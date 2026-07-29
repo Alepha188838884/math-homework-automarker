@@ -25,6 +25,11 @@ import {
   gradeSubmission,
   setBaseUrl,
   uploadSolution,
+  updateQuestionGrade,
+  deleteAssignment,
+  deleteCourse,
+  deleteCourseStudent,
+  resetStudentPassword,
 } from "../api";
 import { getErrorMessage, type StatusMessage } from "../utils";
 
@@ -138,6 +143,15 @@ export interface TeacherWorkspaceContextValue {
   gradeSubmissionById: (submissionId: number) => Promise<void>;
   viewSubmissionResult: (submissionId: number) => Promise<void>;
   closeResultModal: () => void;
+  overrideQuestion: (
+    submissionId: number,
+    questionNumber: number,
+    payload: { score: number; is_correct: boolean; comment?: string },
+  ) => Promise<void>;
+  deleteAssignmentById: (assignmentId: number) => Promise<void>;
+  deleteCourseById: (courseId: number) => Promise<void>;
+  removeStudent: (courseId: number, studentId: number) => Promise<void>;
+  resetStudentPasswordAction: (courseId: number, studentId: number, newPassword: string) => Promise<void>;
 }
 
 const TeacherWorkspaceContext = createContext<TeacherWorkspaceContextValue | undefined>(undefined);
@@ -191,7 +205,6 @@ export const TeacherWorkspaceProvider: React.FC<{ children: React.ReactNode }> =
     setGradingIds(new Set());
     setViewingIds(new Set());
     setSolutionMessage(null);
-    setActionMessage(null);
   }, []);
 
   const loadCourses = useCallback(async () => {
@@ -347,6 +360,75 @@ export const TeacherWorkspaceProvider: React.FC<{ children: React.ReactNode }> =
     }
   }, []);
 
+  const overrideQuestion = useCallback(
+    async (
+      submissionId: number,
+      questionNumber: number,
+      payload: { score: number; is_correct: boolean; comment?: string },
+    ) => {
+      const result = await updateQuestionGrade(submissionId, questionNumber, payload);
+      setModalResult(result);
+      if (selectedAssignmentIdState !== null) {
+        await loadAssignmentData(selectedAssignmentIdState);
+      }
+    },
+    [loadAssignmentData, selectedAssignmentIdState],
+  );
+
+  const deleteAssignmentById = useCallback(
+    async (assignmentId: number) => {
+      setActionMessage(null);
+      try {
+        await deleteAssignment(assignmentId);
+        setActionMessage({ type: "success", text: "作业已删除。" });
+        if (selectedCourseIdState !== null) {
+          await loadAssignmentsForCourse(selectedCourseIdState);
+        }
+      } catch (error) {
+        setActionMessage({ type: "error", text: getErrorMessage(error) });
+      }
+    },
+    [loadAssignmentsForCourse, selectedCourseIdState],
+  );
+
+  const deleteCourseById = useCallback(async (courseId: number) => {
+    setActionMessage(null);
+    try {
+      await deleteCourse(courseId);
+      setActionMessage({ type: "success", text: "班级已删除。" });
+      await loadCourses();
+    } catch (error) {
+      setActionMessage({ type: "error", text: getErrorMessage(error) });
+    }
+  }, [loadCourses]);
+
+  const removeStudent = useCallback(
+    async (courseId: number, studentId: number) => {
+      setActionMessage(null);
+      try {
+        await deleteCourseStudent(courseId, studentId);
+        setActionMessage({ type: "success", text: "学生已移除。" });
+        await loadCourseStudents(courseId);
+      } catch (error) {
+        setActionMessage({ type: "error", text: getErrorMessage(error) });
+      }
+    },
+    [loadCourseStudents],
+  );
+
+  const resetStudentPasswordAction = useCallback(
+    async (courseId: number, studentId: number, newPassword: string) => {
+      setActionMessage(null);
+      try {
+        const response = await resetStudentPassword(courseId, studentId, newPassword);
+        setActionMessage({ type: "success", text: response.detail });
+      } catch (error) {
+        setActionMessage({ type: "error", text: getErrorMessage(error) });
+      }
+    },
+    [],
+  );
+
   const gradeAllSelectedAssignment = useCallback(async () => {
     if (selectedAssignmentIdState === null) {
       throw new Error("请先选择作业。");
@@ -483,6 +565,11 @@ export const TeacherWorkspaceProvider: React.FC<{ children: React.ReactNode }> =
       gradeSubmissionById,
       viewSubmissionResult,
       closeResultModal,
+      overrideQuestion,
+      deleteAssignmentById,
+      deleteCourseById,
+      removeStudent,
+      resetStudentPasswordAction,
     }),
     [
       actionMessage,
@@ -495,6 +582,8 @@ export const TeacherWorkspaceProvider: React.FC<{ children: React.ReactNode }> =
       courseStudentsError,
       courses,
       coursesError,
+      deleteAssignmentById,
+      deleteCourseById,
       gradeAllSelectedAssignment,
       gradeAllSummary,
       gradeSubmissionById,
@@ -512,6 +601,9 @@ export const TeacherWorkspaceProvider: React.FC<{ children: React.ReactNode }> =
       loadCourseStudents,
       loadCourses,
       modalResult,
+      overrideQuestion,
+      removeStudent,
+      resetStudentPasswordAction,
       selectedAssignmentIdState,
       selectedCourseIdState,
       solutionMessage,

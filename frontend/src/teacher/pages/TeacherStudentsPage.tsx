@@ -4,7 +4,10 @@ import { useTeacherWorkspace } from "../TeacherWorkspaceContext";
 import { getErrorMessage, type StatusMessage } from "../../utils";
 
 function TeacherStudentsPage() {
-  const { selectedCourseId, courseStudents, courseStudentsError, isLoadingCourseStudents, loadCourseStudents } = useTeacherWorkspace();
+  const {
+    selectedCourseId, courseStudents, courseStudentsError, isLoadingCourseStudents, loadCourseStudents,
+    removeStudent, resetStudentPasswordAction, actionMessage,
+  } = useTeacherWorkspace();
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [newName, setNewName] = useState("");
   const [newEmail, setNewEmail] = useState("");
@@ -24,6 +27,24 @@ function TeacherStudentsPage() {
       setMessage({ type: "success", text: "学生已添加。" });
     } catch (error) { setMessage({ type: "error", text: getErrorMessage(error) }); }
     finally { setIsCreating(false); }
+  };
+
+  const handleRemoveStudent = (studentId: number) => {
+    if (selectedCourseId === null) return;
+    if (window.confirm("移除该学生将同时删除其全部提交记录，且不可恢复。确定移除？")) {
+      void removeStudent(selectedCourseId, studentId);
+    }
+  };
+
+  const handleResetPassword = (studentId: number) => {
+    if (selectedCourseId === null) return;
+    const newPassword = window.prompt("请输入该学生的新密码：");
+    if (newPassword === null) return;
+    if (!newPassword.trim()) {
+      setMessage({ type: "error", text: "密码不能为空。" });
+      return;
+    }
+    void resetStudentPasswordAction(selectedCourseId, studentId, newPassword);
   };
 
   return (
@@ -50,10 +71,18 @@ function TeacherStudentsPage() {
               ) : (
                 <div className="table-wrap">
                   <table className="data-table">
-                    <thead><tr><th>ID</th><th>姓名</th><th>邮箱</th></tr></thead>
+                    <thead><tr><th>ID</th><th>姓名</th><th>邮箱</th><th>操作</th></tr></thead>
                     <tbody>
                       {courseStudents.map((s) => (
-                        <tr key={s.id}><td>{s.id}</td><td>{s.name}</td><td>{s.email}</td></tr>
+                        <tr key={s.id}>
+                          <td>{s.id}</td><td>{s.name}</td><td>{s.email}</td>
+                          <td>
+                            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                              <button type="button" className="btn btn-danger" onClick={() => handleRemoveStudent(s.id)}>移除</button>
+                              <button type="button" className="btn btn-secondary" onClick={() => handleResetPassword(s.id)}>重置密码</button>
+                            </div>
+                          </td>
+                        </tr>
                       ))}
                     </tbody>
                   </table>
@@ -78,6 +107,7 @@ function TeacherStudentsPage() {
           </div>
         )}
         {message && <div className={`alert alert-${message.type}`} style={{ marginTop: "12px" }}>{message.text}</div>}
+        {actionMessage && <div className={`alert alert-${actionMessage.type}`} style={{ marginTop: "12px" }}>{actionMessage.text}</div>}
       </section>
     </div>
   );

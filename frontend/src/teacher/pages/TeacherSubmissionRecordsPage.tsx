@@ -7,7 +7,7 @@ function TeacherSubmissionRecordsPage() {
   const {
     modalResult, isModalOpen, gradingIds, viewingIds, submissions,
     actionMessage, submissionDataError,
-    gradeSubmissionById, viewSubmissionResult, closeResultModal,
+    gradeSubmissionById, viewSubmissionResult, closeResultModal, overrideQuestion,
   } = useTeacherWorkspace();
 
   return (
@@ -18,7 +18,17 @@ function TeacherSubmissionRecordsPage() {
         <SubmissionList submissions={submissions} gradingIds={gradingIds} viewingIds={viewingIds} onGrade={gradeSubmissionById} onViewResult={viewSubmissionResult} />
         {actionMessage && <div className={`alert alert-${actionMessage.type}`} style={{ marginTop: "14px" }}>{actionMessage.text}</div>}
       </section>
-      <GradeResultModal isOpen={isModalOpen} result={modalResult} onClose={closeResultModal} />
+      <GradeResultModal
+        isOpen={isModalOpen}
+        result={modalResult}
+        onClose={closeResultModal}
+        editable
+        onSaveQuestion={async (questionNumber, payload) => {
+          if (modalResult) {
+            await overrideQuestion(modalResult.submission_id, questionNumber, payload);
+          }
+        }}
+      />
     </div>
   );
 }

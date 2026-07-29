@@ -11,6 +11,7 @@ function TeacherCoursesPage() {
   const {
     backendBaseUrl, applyBackendBaseUrl, courses, selectedCourseId,
     isLoadingCourses, coursesError, setSelectedCourseId, loadCourses,
+    deleteCourseById, actionMessage,
   } = useTeacherWorkspace();
 
   const [baseUrlInput, setBaseUrlInput] = useState(backendBaseUrl);
@@ -60,6 +61,12 @@ function TeacherCoursesPage() {
     finally { setIsGeneratingJoinLink(false); }
   };
 
+  const handleDeleteCourse = (courseId: number) => {
+    if (window.confirm("删除课程将同时删除其学生、作业与全部提交，且不可恢复。确定删除？")) {
+      void deleteCourseById(courseId);
+    }
+  };
+
   const handleCopyJoinLink = async () => {
     if (!latestJoinUrl) { setJoinLinkMessage({ type: "error", text: "请先生成加入链接。" }); return; }
     try {
@@ -101,13 +108,17 @@ function TeacherCoursesPage() {
             ) : (
               <div style={{ display: "grid", gap: "8px" }}>
                 {courses.map((c) => (
-                  <button key={c.id} type="button" onClick={() => setSelectedCourseId(c.id)} className={`selection-btn${selectedCourseId === c.id ? " active" : ""}`}>
-                    <strong>#{c.id}</strong> {courseLabel(c)}
-                  </button>
+                  <div key={c.id} style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                    <button type="button" onClick={() => setSelectedCourseId(c.id)} className={`selection-btn${selectedCourseId === c.id ? " active" : ""}`} style={{ flex: 1, minWidth: 0 }}>
+                      <strong>#{c.id}</strong> {courseLabel(c)}
+                    </button>
+                    <button type="button" className="btn btn-danger" onClick={() => handleDeleteCourse(c.id)}>删除</button>
+                  </div>
                 ))}
               </div>
             )}
             {coursesError && <div className="alert alert-error" style={{ marginTop: "12px" }}>{coursesError}</div>}
+            {actionMessage && <div className={`alert alert-${actionMessage.type}`} style={{ marginTop: "12px" }}>{actionMessage.text}</div>}
           </div>
           <div>
             <h3 className="sub-title">创建班级</h3>
