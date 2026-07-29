@@ -59,6 +59,7 @@ class TeacherEntryRequest(BaseModel):
     name: str | None = None
     email: str
     password: str
+    signup_code: str | None = None
 
 
 class StudentEntryRequest(BaseModel):
@@ -72,6 +73,7 @@ class BootstrapTeacherRequest(BaseModel):
     name: str
     email: str
     password: str
+    signup_code: str | None = None
 
 
 class TeacherLoginResponse(Token):
@@ -255,3 +257,13 @@ class GradeAllStartResponse(BaseModel):
     total: int
     started: int
     skipped: int
+
+
+class QuestionOverrideRequest(BaseModel):
+    score: float
+    is_correct: bool
+    comment: str | None = None
+
+
+class StudentPasswordResetRequest(BaseModel):
+    new_password: str

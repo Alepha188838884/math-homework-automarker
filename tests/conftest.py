@@ -198,11 +198,12 @@ class ApiHelper:
         name: str = "Test Teacher",
         email: str = "teacher@example.com",
         password: str = "pw123456",
+        signup_code: str | None = None,
     ):
-        return self.client.post(
-            "/auth/bootstrap-teacher",
-            json={"name": name, "email": email, "password": password},
-        )
+        payload: dict[str, Any] = {"name": name, "email": email, "password": password}
+        if signup_code is not None:
+            payload["signup_code"] = signup_code
+        return self.client.post("/auth/bootstrap-teacher", json=payload)
 
     def teacher_entry(
         self,
@@ -210,11 +211,12 @@ class ApiHelper:
         name: str,
         email: str,
         password: str = "pw123456",
+        signup_code: str | None = None,
     ):
-        return self.client.post(
-            "/auth/teacher/entry",
-            json={"name": name, "email": email, "password": password},
-        )
+        payload: dict[str, Any] = {"name": name, "email": email, "password": password}
+        if signup_code is not None:
+            payload["signup_code"] = signup_code
+        return self.client.post("/auth/teacher/entry", json=payload)
 
     def teacher_login(self, *, email: str, password: str):
         return self.client.post(
@@ -385,6 +387,63 @@ class ApiHelper:
         return self.client.get(
             f"/submissions/{submission_id}/result",
             headers=teacher_headers,
+        )
+
+    def override_question(
+        self,
+        *,
+        teacher_headers: dict[str, str],
+        submission_id: int,
+        question_number: int,
+        score: float,
+        is_correct: bool,
+        comment: str | None = None,
+    ):
+        payload: dict[str, Any] = {"score": score, "is_correct": is_correct}
+        if comment is not None:
+            payload["comment"] = comment
+        return self.client.put(
+            f"/submissions/{submission_id}/questions/{question_number}",
+            headers=teacher_headers,
+            json=payload,
+        )
+
+    def get_my_submission_result(self, *, student_headers: dict[str, str], submission_id: int):
+        return self.client.get(
+            f"/students/me/submissions/{submission_id}/result",
+            headers=student_headers,
+        )
+
+    def delete_assignment(self, *, teacher_headers: dict[str, str], assignment_id: int):
+        return self.client.delete(f"/assignments/{assignment_id}", headers=teacher_headers)
+
+    def delete_course_student(
+        self,
+        *,
+        teacher_headers: dict[str, str],
+        course_id: int,
+        student_id: int,
+    ):
+        return self.client.delete(
+            f"/courses/{course_id}/students/{student_id}",
+            headers=teacher_headers,
+        )
+
+    def delete_course(self, *, teacher_headers: dict[str, str], course_id: int):
+        return self.client.delete(f"/courses/{course_id}", headers=teacher_headers)
+
+    def reset_student_password(
+        self,
+        *,
+        teacher_headers: dict[str, str],
+        course_id: int,
+        student_id: int,
+        new_password: str,
+    ):
+        return self.client.post(
+            f"/courses/{course_id}/students/{student_id}/password",
+            headers=teacher_headers,
+            json={"new_password": new_password},
         )
 
 

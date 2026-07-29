@@ -4,25 +4,38 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import time as _time
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from pathlib import Path
 from typing import BinaryIO, Any
 
 logger = logging.getLogger(__name__)
 from uuid import uuid4
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from auth import create_access_token, decode_token, hash_password, verify_password
 from database import SessionLocal, get_db
-from models import AnswerFile, Assignment, Course, GradeResult, Student, Submission, SubmissionStatus, Teacher
+from models import (
+    AnswerFile,
+    Assignment,
+    Course,
+    GradeQuestion,
+    GradeResult,
+    Student,
+    Submission,
+    SubmissionStatus,
+    Teacher,
+)
 from grading_service import (
     GRADABLE_STATUSES,
     claim_for_grading,
@@ -43,6 +56,7 @@ from schemas import (
     GradeQuestionItem,
     GradeStartResponse,
     JoinLinkResponse,
+    QuestionOverrideRequest,
     StudentAssignmentStatus,
     StudentCreate,
     StudentEntryRequest,
@@ -50,6 +64,7 @@ from schemas import (
     StudentJoinResponse,
     StudentLoginRequest,
     StudentLoginResponse,
+    StudentPasswordResetRequest,
     StudentPublic,
     SubmissionOut,
     SubmissionResponse,
@@ -273,6 +288,131 @@ def _get_submission_for_teacher_or_404(db: Session, submission_id: int, teacher:
     if assignment is None or assignment.teacher_id != teacher.id:
         raise _forbidden("该 submission 不属于当前老师。")
     return submission
+
+
+def _check_teacher_signup_code(signup_code: str | None) -> None:
+    expected = os.getenv("TEACHER_SIGNUP_CODE", "").strip()
+    if expected and signup_code != expected:
+        raise HTTPException(status_code=403, detail="邀请码不正确，无法注册新教师账号。")
+
+
+def _delete_submission_cascade(db: Session, submission: Submission) -> str:
+    """Delete a submission's grade_questions -> grade_result -> submission row.
+
+    Does not commit. Returns the submission's file_path for best-effort
+    filesystem cleanup by the caller.
+    """
+    grade_result = submission.grade_result
+    if grade_result is not None:
+        for question in list(grade_result.questions):
+            db.delete(question)
+        db.flush()
+        db.delete(grade_result)
+    file_path = submission.file_path
+    db.delete(submission)
+    return file_path
+
+
+def _delete_assignment_cascade(db: Session, assignment: Assignment) -> tuple[list[str], int | None]:
+    """Delete all submissions (+ grade data) and the answer file for an assignment,
+    then the assignment itself. Commits once.
+
+    Returns (file_paths, answer_file_id) for best-effort filesystem cleanup.
+    """
+    file_paths: list[str] = []
+    submissions = (
+        db.execute(select(Submission).where(Submission.assignment_id == assignment.id))
+        .scalars()
+        .all()
+    )
+    for submission in submissions:
+        file_paths.append(_delete_submission_cascade(db, submission))
+
+    answer_file = db.execute(
+        select(AnswerFile).where(AnswerFile.assignment_id == assignment.id)
+    ).scalar_one_or_none()
+    answer_file_id: int | None = None
+    if answer_file is not None:
+        answer_file_id = answer_file.id
+        file_paths.append(answer_file.file_path)
+        db.delete(answer_file)
+
+    db.delete(assignment)
+    db.commit()
+    return file_paths, answer_file_id
+
+
+def _cleanup_files_best_effort(file_paths: list[str], answer_file_id: int | None = None) -> None:
+    for path_str in file_paths:
+        try:
+            Path(path_str).unlink(missing_ok=True)
+        except OSError:
+            logger.warning("cleanup_failed path=%s", path_str, exc_info=True)
+    if answer_file_id is not None:
+        cache_dir = TEACHER_CACHE_DIR / str(answer_file_id)
+        try:
+            shutil.rmtree(cache_dir)
+        except OSError:
+            logger.warning("cleanup_failed_cache_dir path=%s", cache_dir, exc_info=True)
+
+
+def _build_submission_result_response(
+    submission: Submission,
+    grade_result: GradeResult,
+) -> SubmissionResultResponse:
+    questions: list[GradeQuestionItem] = []
+    raw_json = grade_result.raw_json if isinstance(grade_result.raw_json, dict) else {}
+    normalized = raw_json.get("normalized") if isinstance(raw_json, dict) else None
+    normalized_questions = normalized.get("questions") if isinstance(normalized, dict) else None
+    if isinstance(normalized_questions, list):
+        for index, item in enumerate(normalized_questions, start=1):
+            if not isinstance(item, dict):
+                continue
+            question_id = str(item.get("question_id") or f"Q{index}").strip() or f"Q{index}"
+            question_number_raw = item.get("question_number", index)
+            question_number = int(question_number_raw) if isinstance(question_number_raw, int) else index
+            comment = str(item.get("comment") or "").strip() or None
+            auto_graded = bool(item.get("auto_graded", False))
+            manual_override = bool(item.get("manual_override", False))
+            if not auto_graded and not manual_override and comment and "人工复核" not in comment:
+                comment = f"{comment}（需人工复核）"
+            if comment and not comment.startswith("["):
+                comment = f"[{question_id}] {comment}"
+            score_raw = item.get("score")
+            score = float(score_raw) if isinstance(score_raw, (int, float)) else None
+            is_correct_raw = item.get("is_correct")
+            is_correct = bool(is_correct_raw) if isinstance(is_correct_raw, bool) else None
+            max_score_raw = item.get("max_score")
+            max_score = float(max_score_raw) if isinstance(max_score_raw, (int, float)) else 1.0
+            questions.append(
+                GradeQuestionItem(
+                    number=question_number,
+                    is_correct=is_correct,
+                    score=score,
+                    max_score=max_score,
+                    comment=comment,
+                )
+            )
+    else:
+        questions = [
+            GradeQuestionItem(
+                number=item.question_number,
+                is_correct=item.is_correct,
+                score=item.score,
+                max_score=item.max_score,
+                comment=item.comment,
+            )
+            for item in grade_result.questions
+        ]
+    return SubmissionResultResponse(
+        submission_id=submission.id,
+        status=submission.status,
+        model_name=grade_result.model_name,
+        graded_at=submission.graded_at,
+        questions=questions,
+        total_score=grade_result.total_score,
+        max_total_score=grade_result.max_total_score,
+    )
 
 
 def _upload_solution_for_assignment(
@@ -626,6 +766,8 @@ def bootstrap_teacher(
     if teacher_count > 0:
         raise HTTPException(status_code=400, detail="系统已存在老师账号，bootstrap 已关闭。")
 
+    _check_teacher_signup_code(payload.signup_code)
+
     teacher = _create_teacher_account(
         db,
         name=payload.name,
@@ -664,6 +806,8 @@ def teacher_entry(
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="新账号注册需要提供 name。")
+
+    _check_teacher_signup_code(payload.signup_code)
 
     teacher = _create_teacher_account(
         db,
@@ -1170,58 +1314,218 @@ def get_submission_result(
     if grade_result is None:
         raise HTTPException(status_code=404, detail="该 submission 尚无评分结果。")
 
-    questions: list[GradeQuestionItem] = []
-    raw_json = grade_result.raw_json if isinstance(grade_result.raw_json, dict) else {}
+    return _build_submission_result_response(submission, grade_result)
+
+
+@app.put(
+    "/submissions/{submission_id}/questions/{question_number}",
+    response_model=SubmissionResultResponse,
+)
+def override_submission_question(
+    submission_id: int,
+    question_number: int,
+    payload: QuestionOverrideRequest,
+    db: Session = Depends(get_db),
+    current_teacher: Teacher = Depends(get_current_teacher),
+) -> SubmissionResultResponse:
+    submission = _get_submission_for_teacher_or_404(db, submission_id, current_teacher)
+
+    grade_result = db.execute(
+        select(GradeResult).where(GradeResult.submission_id == submission_id)
+    ).scalar_one_or_none()
+    if grade_result is None:
+        raise HTTPException(status_code=404, detail="该 submission 尚无评分结果。")
+
+    raw_json = deepcopy(grade_result.raw_json) if isinstance(grade_result.raw_json, dict) else {}
     normalized = raw_json.get("normalized") if isinstance(raw_json, dict) else None
     normalized_questions = normalized.get("questions") if isinstance(normalized, dict) else None
-    if isinstance(normalized_questions, list):
-        for index, item in enumerate(normalized_questions, start=1):
-            if not isinstance(item, dict):
-                continue
-            question_id = str(item.get("question_id") or f"Q{index}").strip() or f"Q{index}"
-            question_number_raw = item.get("question_number", index)
-            question_number = int(question_number_raw) if isinstance(question_number_raw, int) else index
-            comment = str(item.get("comment") or "").strip() or None
-            auto_graded = bool(item.get("auto_graded", False))
-            if not auto_graded and comment and "人工复核" not in comment:
-                comment = f"{comment}（需人工复核）"
-            if comment and not comment.startswith("["):
-                comment = f"[{question_id}] {comment}"
-            score_raw = item.get("score")
-            score = float(score_raw) if isinstance(score_raw, (int, float)) else None
-            is_correct_raw = item.get("is_correct")
-            is_correct = bool(is_correct_raw) if isinstance(is_correct_raw, bool) else None
-            max_score_raw = item.get("max_score")
-            max_score = float(max_score_raw) if isinstance(max_score_raw, (int, float)) else 1.0
-            questions.append(
-                GradeQuestionItem(
-                    number=question_number,
-                    is_correct=is_correct,
-                    score=score,
-                    max_score=max_score,
-                    comment=comment,
-                )
-            )
+    if not isinstance(normalized_questions, list):
+        raise HTTPException(status_code=404, detail=f"题目 {question_number} 不存在。")
+
+    target_item: dict[str, Any] | None = None
+    for index, item in enumerate(normalized_questions):
+        if not isinstance(item, dict):
+            continue
+        item_number_raw = item.get("question_number", index + 1)
+        item_number = int(item_number_raw) if isinstance(item_number_raw, int) else index + 1
+        if item_number == question_number:
+            target_item = item
+            break
+
+    if target_item is None:
+        raise HTTPException(status_code=404, detail=f"题目 {question_number} 不存在。")
+
+    max_score_raw = target_item.get("max_score")
+    max_score = float(max_score_raw) if isinstance(max_score_raw, (int, float)) else 1.0
+    if not (0 <= payload.score <= max_score):
+        raise HTTPException(status_code=400, detail=f"score 必须在 0 到 {max_score} 之间。")
+
+    target_item["score"] = payload.score
+    target_item["is_correct"] = payload.is_correct
+    if payload.comment is not None:
+        target_item["comment"] = payload.comment
+    target_item["manual_override"] = True
+
+    grade_result.raw_json = raw_json
+    flag_modified(grade_result, "raw_json")
+
+    question_id = str(target_item.get("question_id") or f"Q{question_number}").strip() or f"Q{question_number}"
+    comment_for_row = str(target_item.get("comment") or "").strip()
+    row_comment = f"[{question_id}] {comment_for_row}" if comment_for_row else f"[{question_id}]"
+
+    existing_row = db.execute(
+        select(GradeQuestion).where(
+            GradeQuestion.grade_result_id == grade_result.id,
+            GradeQuestion.question_number == question_number,
+        )
+    ).scalar_one_or_none()
+    if existing_row is not None:
+        existing_row.score = payload.score
+        existing_row.is_correct = payload.is_correct
+        existing_row.max_score = max_score
+        existing_row.comment = row_comment
     else:
-        questions = [
-            GradeQuestionItem(
-                number=item.question_number,
-                is_correct=item.is_correct,
-                score=item.score,
-                max_score=item.max_score,
-                comment=item.comment,
+        db.add(
+            GradeQuestion(
+                grade_result_id=grade_result.id,
+                question_number=question_number,
+                is_correct=payload.is_correct,
+                score=payload.score,
+                max_score=max_score,
+                comment=row_comment,
             )
-            for item in grade_result.questions
-        ]
-    return SubmissionResultResponse(
-        submission_id=submission_id,
-        status=submission.status,
-        model_name=grade_result.model_name,
-        graded_at=submission.graded_at,
-        questions=questions,
-        total_score=grade_result.total_score,
-        max_total_score=grade_result.max_total_score,
+        )
+
+    total_score = round(
+        sum(
+            float(q["score"])
+            for q in normalized_questions
+            if isinstance(q, dict) and isinstance(q.get("score"), (int, float))
+        ),
+        2,
     )
+    grade_result.total_score = total_score
+
+    still_needs_review = any(
+        isinstance(q, dict)
+        and not bool(q.get("auto_graded", False))
+        and not bool(q.get("manual_override", False))
+        for q in normalized_questions
+    )
+    submission.status = SubmissionStatus.NEEDS_MANUAL_REVIEW if still_needs_review else SubmissionStatus.GRADED
+
+    db.commit()
+    db.refresh(grade_result)
+    db.refresh(submission)
+
+    return _build_submission_result_response(submission, grade_result)
+
+
+@app.get(
+    "/students/me/submissions/{submission_id}/result",
+    response_model=SubmissionResultResponse,
+)
+def get_my_submission_result(
+    submission_id: int,
+    db: Session = Depends(get_db),
+    current_student: Student = Depends(get_current_student),
+) -> SubmissionResultResponse:
+    submission = _get_submission_by_id(db, submission_id)
+    if submission is None or submission.student_id != current_student.id:
+        raise HTTPException(status_code=404, detail=f"Submission {submission_id} 不存在。")
+    if submission.status not in {SubmissionStatus.GRADED, SubmissionStatus.NEEDS_MANUAL_REVIEW}:
+        raise HTTPException(status_code=404, detail="该 submission 尚未完成评分。")
+
+    grade_result = db.execute(
+        select(GradeResult).where(GradeResult.submission_id == submission_id)
+    ).scalar_one_or_none()
+    if grade_result is None:
+        raise HTTPException(status_code=404, detail="该 submission 尚无评分结果。")
+
+    return _build_submission_result_response(submission, grade_result)
+
+
+@app.delete("/assignments/{assignment_id}", status_code=204)
+def delete_assignment(
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    current_teacher: Teacher = Depends(get_current_teacher),
+) -> Response:
+    assignment = _get_assignment_for_teacher_or_404(db, assignment_id, current_teacher)
+    file_paths, answer_file_id = _delete_assignment_cascade(db, assignment)
+    _cleanup_files_best_effort(file_paths, answer_file_id)
+    return Response(status_code=204)
+
+
+@app.delete("/courses/{course_id}/students/{student_id}", status_code=204)
+def delete_course_student(
+    course_id: int,
+    student_id: int,
+    db: Session = Depends(get_db),
+    current_teacher: Teacher = Depends(get_current_teacher),
+) -> Response:
+    course = _get_course_for_teacher_or_404(db, course_id, current_teacher)
+    student = _get_student_by_id(db, student_id)
+    if student is None or student.course_id != course.id:
+        raise HTTPException(status_code=404, detail=f"Student {student_id} 不存在。")
+
+    file_paths: list[str] = []
+    submissions = (
+        db.execute(select(Submission).where(Submission.student_id == student.id))
+        .scalars()
+        .all()
+    )
+    for submission in submissions:
+        file_paths.append(_delete_submission_cascade(db, submission))
+
+    db.delete(student)
+    db.commit()
+    _cleanup_files_best_effort(file_paths)
+    return Response(status_code=204)
+
+
+@app.delete("/courses/{course_id}", status_code=204)
+def delete_course(
+    course_id: int,
+    db: Session = Depends(get_db),
+    current_teacher: Teacher = Depends(get_current_teacher),
+) -> Response:
+    course = _get_course_for_teacher_or_404(db, course_id, current_teacher)
+
+    assignments = (
+        db.execute(select(Assignment).where(Assignment.course_id == course.id))
+        .scalars()
+        .all()
+    )
+    for assignment in assignments:
+        file_paths, answer_file_id = _delete_assignment_cascade(db, assignment)
+        _cleanup_files_best_effort(file_paths, answer_file_id)
+
+    students = db.execute(select(Student).where(Student.course_id == course.id)).scalars().all()
+    for student in students:
+        db.delete(student)
+
+    db.delete(course)
+    db.commit()
+    return Response(status_code=204)
+
+
+@app.post("/courses/{course_id}/students/{student_id}/password")
+def reset_student_password(
+    course_id: int,
+    student_id: int,
+    payload: StudentPasswordResetRequest,
+    db: Session = Depends(get_db),
+    current_teacher: Teacher = Depends(get_current_teacher),
+) -> dict[str, str]:
+    course = _get_course_for_teacher_or_404(db, course_id, current_teacher)
+    student = _get_student_by_id(db, student_id)
+    if student is None or student.course_id != course.id:
+        raise HTTPException(status_code=404, detail=f"Student {student_id} 不存在。")
+
+    student.password_hash = hash_password(payload.new_password)
+    db.commit()
+    return {"detail": "密码已重置。"}
 
 
 if __name__ == "__main__":
