@@ -2,8 +2,7 @@
 
 ## 当前阶段
 
-多供应商重构「三步走」的 **第一步（验证）已交付脚本，等待真实 API key 实测**。
-总体方案见本次对话的架构框架文档：两阶段分离（文档解析 → GradingProvider 抽象层），主选豆包、备选 Qwen。
+**开发全部完成，部署就绪（2026-07-29）。** 豆包路线「三步走」的第二步（grading_provider 重构）与第三步（Render Docker 部署配置）均已落地，交付功能（人工改分/删除/邀请码/学生查结果/重置密码）与教师文档齐备。本地 13 个 commit 待用户过目后 push；剩余事项只有用户能做：错题样例验证判分质量、Render Blueprint 首次部署（见 2026-07-29 会话总记录的验收清单）。
 
 ## 2026-07-05 会话记录
 
@@ -100,3 +99,48 @@
 
 - 代码编写委托给 Sonnet 子代理（general-purpose + model: sonnet，串行），主会话只做规格、审查、验证、文档。maker-verifier 分离：写完必须由另一个独立子代理对照规格审查。
 - 工作区有大量未提交改动（前端重构 + 后端修改），本次新增文件与之无关，提交时注意分开。
+
+## 2026-07-29 会话记录：收尾两个 commit（上传限制/密码校验 + 文档刷新）
+
+### 完成
+- **Commit `3738410` feat: tighten upload limit and password reset validation**：`main.py` `MAX_UPLOAD_BYTES` 100MB→20MB（Render 磁盘仅 1GB）；`schemas.py` `StudentCreate.password` 与 `StudentPasswordResetRequest.new_password` 都补 `Field(min_length=8)`（此前两者都**完全没有**长度约束——发现任务描述假设的"与 StudentCreate.password 现有约束一致"前提不成立，advisor 确认后按"取两者一致的合理值"处理，8 位是最严格的安全值，不破坏任何现有测试 fixture）；`tests/test_delivery_features.py` 新增 `test_reset_password_too_short_returns_422`；前端 `TeacherStudentsPage.tsx` 重置密码校验改为检查**原始** `newPassword.length`（不 trim，因为后端校验的是原始字符串），提示"密码至少 8 位。"。`StudentJoinRequest.password`（加入链接自助注册）刻意不加约束，超出本次范围。
+- **Commit `8b997f3` docs: teacher guide, architecture refresh, and frontend CI**：新增 `docs/teacher_guide.md`（非技术向中文教师手册，9 节）；`README.md`/`CLAUDE.md` 刷新过时内容（`qwen_service.py`/`teacher_images.py` 已删除文件引用、`"Solution"` 分隔段硬要求已不存在、批改已异步化 202+BackgroundTasks+~10s 轮询、新增的改分/删除/重置密码/学生查结果端点、Docker 部署取代 Python runtime buildCommand）；`.env.example` 补 `ARK_API_KEY`/`GRADING_PROVIDER`/`DOUBAO_VISION_MODEL`/`ARK_BASE_URL`/`TEACHER_SIGNUP_CODE`，Qwen 相关变量标注为备选路径专用（`QWEN_PLUS_MODEL` 保留，仍被 `qwen_client.py` 读取但发现它只服务于已停用的旧文本链路，不在当前 Qwen 备选路径里，已在 README 里说明清楚）；新增 `.github/workflows/frontend-build.yml`（Node 20 + npm ci + npm run build，与 `backend-tests.yml` 风格一致，独立文件而非合并 job）。
+
+### 判据结果
+- `python3 -m pytest -q tests`：109 passed, 1 deselected（两次运行，Commit A 后与 Commit B 后各一次，无回归）。
+- `cd frontend && npm run build`：通过。
+- `npm run test:e2e`：16/16 通过。踩坑记录：任务要求端口 5174/8010（不是 e2e/README.md 默认写的 8000）——后端库表用 `python3 -c "from db import engine, Base; import models; Base.metadata.create_all(bind=engine)"`（本机 `alembic` CLI 因项目根 `alembic/` 目录遮蔽 pip 包不可用，但 `import alembic` 本身在这台机器上其实正常，无需 anaconda python，直接系统 `python3` 即可）；后端/前端都必须用非沙箱后台 Bash 启动（`dangerouslyDisableSandbox: true`），否则 vite/uvicorn 会间歇 EPERM；跑完 `pkill` 掉两个进程并删除 scratchpad 临时目录。
+- 两个 workflow YAML 用 `python3 -c "import yaml; yaml.safe_load(...)"` 校验通过。
+
+### 已验证事实 / 教训
+- 任务描述里的前提假设不总是对的（"与 StudentCreate.password 现有约束一致"），先用 grep 确认现状再动手；发现不一致时用 advisor 拍板具体数值而不是卡住不做。
+- 子代理（fast-worker）在按 spec 写文档时主动交叉核对了任务简报里的两个隐含假设并发现均有出入（1. 官方答案上传其实早已不再写 DashScope `qwen_file_id`；2. `QWEN_PLUS_MODEL`/`qwen_client.py` 早已不在当前 Qwen 备选路径里，只服务于旧文本链路），独立 verifier 逐条对照源码复核后确认这两处修正都对——文档类任务同样需要 maker 对照真实代码而非只对照任务描述里给的"事实"。
+- `frontend/e2e/screenshots/`、`frontend/e2e/last-run.json` 已 gitignore，本地反复跑 e2e 不会污染 git 状态。
+
+## 2026-07-29 会话总记录：豆包路线全量落地（orchestrator=Fable 零执行，代码/git 全部由 fast-worker 串行完成，每个 commit 均经独立 verifier 复核）
+
+### 完成（13 个 commit，全部未 push；`git log origin/main..main`）
+
+1. **豆包管线重构**（fda1019, 066c3a7）：新 `grading_provider.py`（豆包主选/Qwen 备选，验证过的两组页图 prompt）+ `grading_service.py`（页图缓存+归一化+入库）；删 `qwen_service.py`/`teacher_images.py`；答案支持 .docx/.pdf，无 "Solution" 分隔段要求；移除 DashScope 文件上传硬依赖（qwen_file_id 改可空，含 migration）；grading_provider 补 9 个单测。
+2. **异步批改**（0fd7bae, 7983165）：两个批改端点改 202 + BackgroundTasks（claim 保持在请求内，409 防并发）；lifespan 启动重置卡死的 GRADING 提交；render.yaml 加 --proxy-headers 修复反代限流误伤；前端轮询驱动状态、按钮 grading 态禁用。
+3. **Render 部署**（e938c93, bac1896）：Dockerfile（python:3.11-slim + libreoffice-writer + fonts-noto-cjk）、.dockerignore、render.yaml 切 docker + 前端 Static Site（SPA rewrite + VITE_API_BASE_URL）+ ARK_API_KEY/GRADING_PROVIDER 等 env；verifier 抓出两颗必爆雷并已修：Render `postgres://` scheme SQLAlchemy 2.x 不认（db.py/alembic env 加 normalize_database_url）、soffice 并发共用 profile 会锁死（每次转换独立 -env:UserInstallation + subprocess 异常转 RuntimeError 中文文案）。
+4. **交付功能**（24f54bd, 1585c5c 后端；768c260, 8620419 前端）：教师逐题改分（PUT /submissions/{id}/questions/{n}，raw_json+GradeQuestion 双写、总分重算、复核完自动转 GRADED）；删除课程/作业/移除学生（显式级联+文件清理，删课单事务原子）；TEACHER_SIGNUP_CODE 邀请码门；学生查自己逐题结果（GET /students/me/submissions/{id}/result，非本人 404 防泄露）；教师重置学生密码。前端：GradeResultModal 编辑模式复用为学生只读、四个页面删除/重置入口、注册邀请码输入。
+5. **收尾**（3738410, 8b997f3, 898bca7）：上传限制 100MB→20MB；密码最小 8 位统一到全部注册入口（join/entry 新建分支/bootstrap/重置，登录分支不受影响）；`docs/teacher_guide.md` 教师手册（9 节，非技术向）；README/CLAUDE.md/.env.example 对齐新架构；`.github/workflows/frontend-build.yml` 前端 CI。
+
+### 终态判据
+- `python3 -m pytest -q tests`：**115 passed, 1 deselected**（会话起点 61 个）。
+- `cd frontend && npm run build` 通过；`npm run test:e2e` 16/16（多轮复跑）。
+- Docker 镜像未本地构建（本机无 docker CLI），Dockerfile 仅经静态审查——首次 Render 部署时留意 build 日志。
+
+### 已验证事实 / 教训
+- maker-verifier 分离本场抓到 4 个真问题：postgres:// scheme（BLOCKER）、soffice 并发 profile（MAJOR）、delete_course 非原子（MAJOR）、clearGradingState 移除导致消息跨上下文残留（MAJOR 回归）。全部修复并有回归测试。
+- 变异验证（临时改坏实现证明测试会红）是防"假绿测试"的有效手段，多个 verifier/maker 使用。
+- Render `fromDatabase.connectionString` 是 `postgres://` 前缀；SQLAlchemy ≥2.x 必须归一化为 `postgresql://`。
+- LibreOffice headless 并发调用必须每次独立 `-env:UserInstallation`；`subprocess` 异常不是 OSError 子类，会穿透窄 except 元组。
+- FastAPI BackgroundTasks 在 TestClient 下于响应返回前执行完毕——异步端点测试天然确定性，无需 sleep/轮询。
+
+### 用户验收清单（部署前）
+1. `git log origin/main..main` 过目 13 个 commit → push（CI 会跑后端 pytest + 前端 build 两个 workflow）。
+2. **错题样例验证**（判分质量 gate 的另一半）：拿一份故意做错几题的作业跑 `validate_providers.py --providers doubao`（或部署后走真实流程），确认豆包不放水。
+3. Render 首次部署：按 `docs/render_deploy.md`——Blueprint 选仓库、填 ARK_API_KEY、部署后确认 onrender 子域名与 render.yaml 预写一致（不一致改三处 URL）、跑一次真实批改。
+4. 可选：设置 `TEACHER_SIGNUP_CODE` 关闭教师开放注册。
