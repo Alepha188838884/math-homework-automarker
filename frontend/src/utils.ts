@@ -15,8 +15,9 @@ export function getErrorMessage(error: unknown): string {
   return "未知错误";
 }
 
-export function isDocxFile(file: File): boolean {
-  return file.name.toLowerCase().endsWith(".docx");
+export function isAnswerFile(file: File): boolean {
+  const lowered = file.name.toLowerCase();
+  return lowered.endsWith(".docx") || lowered.endsWith(".pdf");
 }
 
 export function formatDateTime(value: string | null | undefined): string {

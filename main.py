@@ -283,6 +283,7 @@ def _upload_solution_for_assignment(
     if existing:
         existing.original_filename = file.filename
         existing.file_path = str(local_path)
+        existing.qwen_file_id = None
         answer_file = existing
     else:
         answer_file = AnswerFile(

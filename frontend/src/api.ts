@@ -87,7 +87,7 @@ export interface AnswerFileResponse {
   assignment_id: number;
   original_filename: string;
   file_path: string;
-  qwen_file_id: string;
+  qwen_file_id: string | null;
   uploaded_at: string;
   updated_at?: string;
 }

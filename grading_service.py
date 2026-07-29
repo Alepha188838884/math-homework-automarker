@@ -617,9 +617,6 @@ def grade_one_submission(db: Session, submission_id: int) -> GradeSubmissionResp
         _set_submission_failed(db, submission_obj, SubmissionStatus.FAILED_GRADING, f"评分结果入库失败: {exc}")
         raise HTTPException(status_code=500, detail=f"评分结果入库失败: {exc}") from exc
 
-    if response_questions is None:
-        raise HTTPException(status_code=500, detail="评分结果缺失，无法生成响应。")
-
     return GradeSubmissionResponse(
         submission_id=submission_id_value,
         status=_require_str(submission_obj.status, "submission.status"),

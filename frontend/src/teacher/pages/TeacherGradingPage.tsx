@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import FileUploadArea from "../../components/FileUploadArea";
 import { useTeacherWorkspace } from "../TeacherWorkspaceContext";
-import { formatDateTime, getFailureReason, isDocxFile } from "../../utils";
+import { formatDateTime, getFailureReason, isAnswerFile } from "../../utils";
 
 function TeacherGradingPage() {
   const {
@@ -15,7 +15,7 @@ function TeacherGradingPage() {
 
   const handleUploadSolution = async () => {
     if (selectedAssignmentId === null || solutionFiles.length === 0) return;
-    if (!isDocxFile(solutionFiles[0])) return;
+    if (!isAnswerFile(solutionFiles[0])) return;
     try {
       await uploadSolutionFile(solutionFiles[0]);
       setSolutionFiles([]);
@@ -27,9 +27,9 @@ function TeacherGradingPage() {
     <div className="page-stack">
       <section className="card">
         <h2 className="section-title">批改中心</h2>
-        <FileUploadArea key={`solution-area-${solutionAreaKey}`} label="官方答案 DOCX 文件" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple={false} onFilesSelected={setSolutionFiles} />
+        <FileUploadArea key={`solution-area-${solutionAreaKey}`} label="官方答案文件（DOCX / PDF）" accept=".docx,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf" multiple={false} onFilesSelected={setSolutionFiles} />
         <div style={{ marginTop: "14px", display: "flex", gap: "10px", flexWrap: "wrap" }}>
-          <button type="button" onClick={() => void handleUploadSolution()} disabled={isUploadingSolution || selectedAssignmentId === null || solutionFiles.length === 0 || !isDocxFile(solutionFiles[0])} className="btn btn-primary">
+          <button type="button" onClick={() => void handleUploadSolution()} disabled={isUploadingSolution || selectedAssignmentId === null || solutionFiles.length === 0 || !isAnswerFile(solutionFiles[0])} className="btn btn-primary">
             {isUploadingSolution ? "上传中..." : "上传官方答案"}
           </button>
           <button type="button" onClick={() => void gradeAllSelectedAssignment()} disabled={isGradingAll || selectedAssignmentId === null} className="btn btn-secondary">
@@ -38,12 +38,12 @@ function TeacherGradingPage() {
         </div>
 
         {selectedAssignmentId === null && <div className="empty-state" style={{ marginTop: "14px" }}>请先在顶部选择作业后再上传官方答案或发起批改。</div>}
-        {solutionFiles.length > 0 && !isDocxFile(solutionFiles[0]) && <div className="alert alert-error" style={{ marginTop: "12px" }}>官方答案必须是 .docx 文件。</div>}
+        {solutionFiles.length > 0 && !isAnswerFile(solutionFiles[0]) && <div className="alert alert-error" style={{ marginTop: "12px" }}>官方答案必须是 .docx 或 .pdf 文件。</div>}
         {solutionMessage && <div className={`alert alert-${solutionMessage.type}`} style={{ marginTop: "12px" }}>{solutionMessage.text}</div>}
         {actionMessage && <div className={`alert alert-${actionMessage.type}`} style={{ marginTop: "12px" }}>{actionMessage.text}</div>}
         {latestSolution && (
           <div className="debug-info">
-            <div><strong>答案文件 ID：</strong> {latestSolution.qwen_file_id}</div>
+            <div><strong>答案文件：</strong> {latestSolution.original_filename}</div>
             <div><strong>上传时间：</strong> {formatDateTime(latestSolution.uploaded_at)}</div>
           </div>
         )}
