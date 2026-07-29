@@ -291,8 +291,13 @@ def _get_submission_for_teacher_or_404(db: Session, submission_id: int, teacher:
 
 
 def _check_teacher_signup_code(signup_code: str | None) -> None:
+    # An unset or empty TEACHER_SIGNUP_CODE means the invite-code gate is
+    # disabled entirely (opt-in feature) — this is intentional, not a bug.
     expected = os.getenv("TEACHER_SIGNUP_CODE", "").strip()
-    if expected and signup_code != expected:
+    if not expected:
+        return
+    provided = (signup_code or "").strip()
+    if provided != expected:
         raise HTTPException(status_code=403, detail="邀请码不正确，无法注册新教师账号。")
 
 
@@ -313,11 +318,26 @@ def _delete_submission_cascade(db: Session, submission: Submission) -> str:
     return file_path
 
 
-def _delete_assignment_cascade(db: Session, assignment: Assignment) -> tuple[list[str], int | None]:
+def _delete_assignment_cascade(
+    db: Session,
+    assignment: Assignment,
+    *,
+    commit: bool = True,
+) -> tuple[list[str], int | None]:
     """Delete all submissions (+ grade data) and the answer file for an assignment,
-    then the assignment itself. Commits once.
+    then the assignment itself.
 
-    Returns (file_paths, answer_file_id) for best-effort filesystem cleanup.
+    This never touches the filesystem — it only returns (file_paths,
+    answer_file_id) so the caller can perform best-effort cleanup strictly
+    *after* the transaction has committed successfully. Deleting files before
+    commit would risk removing files whose corresponding DB rows survive a
+    rollback.
+
+    When commit=True (the default), commits immediately so single-assignment
+    deletion is a single atomic step. When commit=False, the caller takes
+    responsibility for committing this cascade's changes together with any of
+    its own changes in one transaction (used by whole-course deletion so that
+    deleting several assignments is all-or-nothing).
     """
     file_paths: list[str] = []
     submissions = (
@@ -338,17 +358,29 @@ def _delete_assignment_cascade(db: Session, assignment: Assignment) -> tuple[lis
         db.delete(answer_file)
 
     db.delete(assignment)
-    db.commit()
+    if commit:
+        db.commit()
     return file_paths, answer_file_id
 
 
-def _cleanup_files_best_effort(file_paths: list[str], answer_file_id: int | None = None) -> None:
+def _cleanup_files_best_effort(
+    file_paths: list[str],
+    answer_file_ids: int | list[int] | None = None,
+) -> None:
     for path_str in file_paths:
         try:
             Path(path_str).unlink(missing_ok=True)
         except OSError:
             logger.warning("cleanup_failed path=%s", path_str, exc_info=True)
-    if answer_file_id is not None:
+
+    if answer_file_ids is None:
+        ids: list[int] = []
+    elif isinstance(answer_file_ids, int):
+        ids = [answer_file_ids]
+    else:
+        ids = answer_file_ids
+
+    for answer_file_id in ids:
         cache_dir = TEACHER_CACHE_DIR / str(answer_file_id)
         try:
             shutil.rmtree(cache_dir)
@@ -1492,14 +1524,21 @@ def delete_course(
 ) -> Response:
     course = _get_course_for_teacher_or_404(db, course_id, current_teacher)
 
+    # Collect all changes and file paths without committing so that deleting
+    # the whole course (all its assignments + students) is one atomic
+    # transaction — if any step raises, nothing committed so far is persisted.
     assignments = (
         db.execute(select(Assignment).where(Assignment.course_id == course.id))
         .scalars()
         .all()
     )
+    all_file_paths: list[str] = []
+    all_answer_file_ids: list[int] = []
     for assignment in assignments:
-        file_paths, answer_file_id = _delete_assignment_cascade(db, assignment)
-        _cleanup_files_best_effort(file_paths, answer_file_id)
+        file_paths, answer_file_id = _delete_assignment_cascade(db, assignment, commit=False)
+        all_file_paths.extend(file_paths)
+        if answer_file_id is not None:
+            all_answer_file_ids.append(answer_file_id)
 
     students = db.execute(select(Student).where(Student.course_id == course.id)).scalars().all()
     for student in students:
@@ -1507,6 +1546,9 @@ def delete_course(
 
     db.delete(course)
     db.commit()
+
+    # Only remove files/caches now that the whole-course deletion committed.
+    _cleanup_files_best_effort(all_file_paths, all_answer_file_ids)
     return Response(status_code=204)
 
 

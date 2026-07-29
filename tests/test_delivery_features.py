@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
 
+import grading_service
+import main
 from models import AnswerFile, Assignment, Course, GradeQuestion, GradeResult, Student, Submission
 
 
@@ -96,6 +99,125 @@ def test_override_needs_review_question_flips_status_to_graded(
         assert rows_after[1].question_number == 2
         assert rows_after[1].score == 1.0
         assert rows_after[1].is_correct is True
+
+
+def test_override_score_boundary_values_are_accepted(
+    api, teacher_account, student_auth, assignment, stub_successful_grading
+):
+    # Q1's max_score in the stub payload is 1.0 — the valid range is the
+    # closed interval [0, max_score], so both endpoints must be accepted.
+    submission_id = _grade_a_submission(api, teacher_account, student_auth, assignment, stub_successful_grading)
+
+    zero_response = api.override_question(
+        teacher_headers=teacher_account["headers"],
+        submission_id=submission_id,
+        question_number=1,
+        score=0.0,
+        is_correct=False,
+    )
+    assert zero_response.status_code == 200
+    q1_zero = next(q for q in zero_response.json()["questions"] if q["number"] == 1)
+    assert q1_zero["score"] == 0.0
+
+    max_response = api.override_question(
+        teacher_headers=teacher_account["headers"],
+        submission_id=submission_id,
+        question_number=1,
+        score=1.0,
+        is_correct=True,
+    )
+    assert max_response.status_code == 200
+    q1_max = next(q for q in max_response.json()["questions"] if q["number"] == 1)
+    assert q1_max["score"] == 1.0
+
+
+def test_override_one_of_several_pending_questions_keeps_needs_manual_review(
+    api, teacher_account, student_auth, assignment, monkeypatch, db_session_factory
+):
+    payload = {
+        "raw_model_json": {"questions": [{"question_id": "Q1"}, {"question_id": "Q2"}, {"question_id": "Q3"}]},
+        "normalized": {
+            "questions": [
+                {
+                    "question_id": "Q1",
+                    "question_number": 1,
+                    "question_match": True,
+                    "question_match_confidence": 0.99,
+                    "auto_graded": True,
+                    "score": 1.0,
+                    "max_score": 1.0,
+                    "is_correct": True,
+                    "comment": "答案正确。",
+                },
+                {
+                    "question_id": "Q2",
+                    "question_number": 2,
+                    "question_match": False,
+                    "question_match_confidence": 0.4,
+                    "auto_graded": False,
+                    "score": None,
+                    "max_score": 1.0,
+                    "is_correct": None,
+                    "comment": "需要人工复核。",
+                },
+                {
+                    "question_id": "Q3",
+                    "question_number": 3,
+                    "question_match": False,
+                    "question_match_confidence": 0.3,
+                    "auto_graded": False,
+                    "score": None,
+                    "max_score": 1.0,
+                    "is_correct": None,
+                    "comment": "需要人工复核。",
+                },
+            ],
+            "summary": {
+                "total_score": 1.0,
+                "max_total_score": 3.0,
+                "needs_manual_review": True,
+            },
+        },
+        "model_meta": {"model_name": "stub-vision-model", "provider": "stub"},
+    }
+
+    def fake_auto_grade_homework(**_):
+        return deepcopy(payload)
+
+    monkeypatch.setattr(grading_service, "auto_grade_homework", fake_auto_grade_homework)
+
+    solution_response = api.upload_solution(
+        teacher_headers=teacher_account["headers"], assignment_id=assignment["id"]
+    )
+    assert solution_response.status_code == 200
+    submit_response = api.upload_submission_as_student(
+        student_headers=student_auth["headers"], assignment_id=assignment["id"]
+    )
+    submission_id = submit_response.json()["id"]
+    grade_response = api.grade_submission(
+        teacher_headers=teacher_account["headers"], submission_id=submission_id
+    )
+    assert grade_response.status_code == 202
+
+    pre_result = api.get_submission_result(
+        teacher_headers=teacher_account["headers"], submission_id=submission_id
+    )
+    assert pre_result.json()["status"] == "needs_manual_review"
+
+    # Resolve only Q2 — Q3 is still pending, so the submission must stay in review.
+    response = api.override_question(
+        teacher_headers=teacher_account["headers"],
+        submission_id=submission_id,
+        question_number=2,
+        score=1.0,
+        is_correct=True,
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "needs_manual_review"
+
+    with db_session_factory() as db:
+        submission = db.get(Submission, submission_id)
+        assert submission.status == "needs_manual_review"
 
 
 def test_override_score_out_of_bounds_returns_400(
@@ -237,6 +359,58 @@ def test_delete_course_forbidden_for_other_teacher(api, teacher_account, second_
     assert response.status_code == 403
 
 
+def test_delete_course_student_forbidden_for_other_teacher(
+    api, teacher_account, second_teacher_account, student_account, course
+):
+    response = api.delete_course_student(
+        teacher_headers=second_teacher_account["headers"],
+        course_id=course["id"],
+        student_id=student_account["id"],
+    )
+    assert response.status_code == 403
+
+
+def test_delete_course_is_atomic_when_second_assignment_deletion_fails(
+    api, teacher_account, course, db_session_factory, monkeypatch
+):
+    """Whole-course deletion must be all-or-nothing: if the cascade for one
+    assignment raises partway through, nothing committed so far (including
+    the first assignment's already-processed deletion) should be persisted.
+    """
+    first = api.create_assignment(
+        teacher_headers=teacher_account["headers"], course_id=course["id"], title="作业一"
+    )
+    assert first.status_code == 200
+    first_id = first.json()["id"]
+
+    second = api.create_assignment(
+        teacher_headers=teacher_account["headers"], course_id=course["id"], title="作业二"
+    )
+    assert second.status_code == 200
+    second_id = second.json()["id"]
+
+    original_cascade = main._delete_assignment_cascade
+    call_count = {"n": 0}
+
+    def flaky_cascade(db, assignment, *, commit=True):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("boom-mid-course-deletion")
+        return original_cascade(db, assignment, commit=commit)
+
+    monkeypatch.setattr(main, "_delete_assignment_cascade", flaky_cascade)
+
+    with pytest.raises(RuntimeError, match="boom-mid-course-deletion"):
+        api.delete_course(teacher_headers=teacher_account["headers"], course_id=course["id"])
+
+    # Nothing should have been committed: both assignments and the course
+    # must still exist, proving the transaction rolled back cleanly.
+    with db_session_factory() as db:
+        assert db.get(Assignment, first_id) is not None
+        assert db.get(Assignment, second_id) is not None
+        assert db.get(Course, course["id"]) is not None
+
+
 # ---------------------------------------------------------------------------
 # Feature 3: teacher signup invite code
 # ---------------------------------------------------------------------------
@@ -264,6 +438,14 @@ def test_teacher_entry_new_account_correct_code_succeeds(api, teacher_account, m
 
 def test_teacher_entry_no_env_no_code_required(api, teacher_account):
     response = api.teacher_entry(name="New Teacher", email="new4@example.com")
+    assert response.status_code == 200
+
+
+def test_teacher_entry_empty_env_signup_code_treated_as_unset(api, teacher_account, monkeypatch):
+    # An explicitly empty TEACHER_SIGNUP_CODE must behave exactly like the
+    # variable being unset — the gate stays disabled either way.
+    monkeypatch.setenv("TEACHER_SIGNUP_CODE", "")
+    response = api.teacher_entry(name="New Teacher", email="new5@example.com")
     assert response.status_code == 200
 
 
