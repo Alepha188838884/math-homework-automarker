@@ -1,12 +1,13 @@
 # MathHomeworkAutomarker
 
-一个面向中小学数学作业场景的自动批改系统。老师上传题目+标准解答的 `.docx`，学生上传作业 `.pdf`，后端会先做本地图像预处理，再调用 DashScope/Qwen 视觉模型完成按题匹配与评分；若题目匹配不确定，则把对应题目标记为“需要人工复核”。
+一个面向中小学数学作业场景的自动批改系统。老师上传题目+标准解答文件（`.docx` 或 `.pdf`），学生上传作业 `.pdf`，后端会先做本地图像预处理，再调用视觉模型（豆包/方舟 ARK 为默认供应商，Qwen 为备选）完成按题匹配与评分；若题目匹配不确定，则把对应题目标记为“需要人工复核”。
 
 这份 README 不是营销文档，而是给 Claude 或其他接手该仓库的开发者看的代码导览。内容以当前仓库代码、测试和部署配置为准。
 
 ## 1. 项目结论速览
 
-- 当前正式链路是“视觉批改链路”，核心入口在 `qwen_service.py`，不是旧的文本/spec 链路。
+- 当前正式链路是“视觉批改链路”，核心入口在 `grading_provider.py`（视觉模型接入，豆包/方舟 ARK 为主、Qwen 为备选）+ `grading_service.py`（页面图片渲染与批改编排），不是旧的文本/spec 链路。
+- 官方答案文件现在支持 `.docx` 或 `.pdf`（不再只支持 docx）。
 - 后端是 `FastAPI + SQLAlchemy + Alembic`，前端是 `React + Vite + TypeScript`。
 - 业务对象很清晰：`Teacher -> Course -> Student / Assignment -> Submission -> GradeResult`。
 - 老师端支持：建班级、生成学生加入链接、建学生、建作业、上传官方答案、批量批改、查看提交状态与批改结果。
@@ -27,27 +28,27 @@
 1. 老师登录或首次自动注册。
 2. 老师创建班级。
 3. 老师为班级创建作业。
-4. 老师上传一份官方答案 `.docx`。
-5. 系统把这份 `.docx` 落盘，并上传到 DashScope 记录 `qwen_file_id`。
-6. 学生通过班级加入链接注册，随后登录。
-7. 学生上传作业 `.pdf`。
-8. 系统把 `.pdf` 落盘，并上传到 DashScope 记录 `qwen_file_id`。
-9. 老师在批改中心触发单份批改或批量批改。
-10. 后端执行本地预处理：
-    - 从老师 `.docx` 中提取“题目图片”和“解答图片”
-    - 把学生 `.pdf` 每页渲染成灰度 PNG
-11. 后端把这些图片按固定顺序喂给视觉模型。
-12. 模型返回严格 JSON：
+4. 老师上传一份官方答案，支持 `.docx` 或 `.pdf`（不再要求 docx-only）。系统只把文件落盘，**不会**再上传到 DashScope 或记录任何远程文件 ID（`qwen_file_id` 字段仍存在于表结构中，但新上传流程始终把它写为 `null`）。
+5. 学生通过班级加入链接注册，随后登录。
+6. 学生上传作业 `.pdf`。同样只落盘，不上传到 DashScope。
+7. 老师在批改中心触发单份批改或批量批改（`POST /submissions/{id}/grade` 或 `POST /assignments/{id}/grade-all`）。这两个接口立即返回 **202**，实际批改在 FastAPI `BackgroundTasks` 里异步执行；前端每约 10 秒轮询一次刷新状态。
+8. 后端执行本地预处理（`grading_service.ensure_answer_page_images`）：
+    - 官方答案是 `.docx` 时，先用 LibreOffice 转成 PDF，再逐页渲染成 PNG
+    - 官方答案是 `.pdf` 时，直接逐页渲染成 PNG
+    - 学生 `.pdf` 同样逐页渲染成 PNG
+9. 后端把老师答案页面图片和学生作答页面图片一起喂给视觉模型（`grading_provider.call_grading_model`），不再按“题目图/解答图”分组，也不要求老师文档里有任何分隔标记——模型自己做整份文档级别的题目匹配。
+10. 模型返回严格 JSON：
     - 每题是否匹配到学生对应题目
     - 是否自动评分
     - 分数 / 满分 / 对错 / 评论
-13. 后端归一化结果，写入 `grade_results` 和部分 `grade_questions`。
-14. 若存在未自动评分题目，则 submission 状态为 `needs_manual_review`；否则为 `graded`。
+11. 后端归一化结果，写入 `grade_results` 和部分 `grade_questions`。
+12. 若存在未自动评分题目，则 submission 状态为 `needs_manual_review`；否则为 `graded`。
 
 ### 2.3 当前不是这样工作的内容
 
 - 当前正式链路**不会自动走** `teacher_spec.py`、`student_parsing.py`、`grading.py`、`aggregate.py` 那套旧文本流程。
-- 上传时虽然仍会把文件上传到 DashScope 并记录 `qwen_file_id`，但正式批改主要依赖**本地文件路径 + 本地图片预处理 + 视觉模型**，而不是直接用 `fileid://` 进行旧式文本批改。
+- 上传官方答案或学生作业时，**不会**再上传到 DashScope，也不会再记录 `qwen_file_id`；正式批改完全依赖**本地文件路径 + 本地图片预处理 + 视觉模型**。
+- 批改不是同步接口，不会在一次 HTTP 请求里等待模型调用完成——发起批改的接口只是把 submission 置为 `grading` 并立即返回，真正的批改在后台任务里跑。
 
 ## 3. 代码地图
 
@@ -68,38 +69,43 @@
 
 如果你想快速理解项目，先读这个文件。
 
-### `qwen_service.py`
+### `grading_provider.py`
 
-当前正式批改链路的核心：
+视觉批改供应商接入层，当前正式批改链路的模型调用入口：
 
-- 调 DashScope 上传文件
-- 构造视觉模型消息
-- 解析模型返回 JSON
-- 对每题结果做归一化
-- 写入 `GradeResult` / `GradeQuestion`
-- 更新 submission 状态
+- `PROVIDER_CONFIGS`：定义豆包（`doubao`，默认）和 Qwen（`qwen`，备选）两套供应商的 base URL、API Key 环境变量、模型名环境变量
+- `get_active_provider_name()`：读取 `GRADING_PROVIDER`（默认 `doubao`）决定当前用哪家
+- `build_messages()`：把老师答案页面图片和学生作答页面图片按固定顺序拼进一条 vision 消息
+- `call_grading_model()`：调用 OpenAI 兼容接口（`openai` SDK），带重试，解析模型返回的 JSON
+
+刻意不 import `db.py` / `models.py`，避免这一层被 `DATABASE_URL` 之类的强依赖绑住。
+
+### `grading_service.py`
+
+批改流程编排，当前正式批改链路最核心的文件：
+
+- `ensure_answer_page_images()`：把官方答案（docx 或 pdf）渲染成缓存的页面 PNG；docx 会先经 `file_processor.convert_docx_to_pdf` 转成 PDF 再拆页
+- `auto_grade_homework()`：整合老师答案图片 + 学生作答图片，调用 `grading_provider.call_grading_model()`，再归一化结果
+- `_normalize_vision_result()` / `_coerce_question_for_storage()`：把模型原始 JSON 转成稳定的逐题结构（分数、满分、是否自动评分等）
+- `claim_for_grading()`：用 `SELECT ... FOR UPDATE` 把 submission 原子性地置为 `grading`，防止并发批改请求打架；`GRADABLE_STATUSES` 定义哪些状态允许发起批改
+- `grade_claimed_submission()` / `run_grading_job()` / `run_grading_batch()`：后台任务真正执行的批改逻辑（供 `main.py` 的 `BackgroundTasks` 调用），失败时把 submission 置为 `failed_grading` 并写入中文错误信息，而不是抛出异常
+- `reset_stuck_grading_submissions()`：应用启动时（`main.py` 的 `lifespan`）调用，把重启前卡在 `grading` 状态的 submission 重置为 `failed_grading`
 
 这是最重要的“AI 批改实现文件”。
 
+### `file_processor.py`
+
+统一的文档转图片工具，独立脚本，不依赖项目其他模块：
+
+- `find_soffice()`：探测 LibreOffice 可执行文件（`SOFFICE_PATH` 环境变量 > `libreoffice`/`soffice` on PATH > macOS 默认安装路径）
+- `convert_docx_to_pdf()`：调用 LibreOffice headless 模式把 `.docx` 转成 `.pdf`
+- `pdf_to_images()` / `process_document()`：用 `PyMuPDF` 把 PDF 逐页渲染成 base64 PNG data URL
+
+本地跑批改（无论是 Web UI 还是 `quick_qwen_grade.py`）在处理 docx 官方答案时都需要系统里能找到 `soffice`，否则会抛出明确的中文报错提示安装方式。
+
 ### `qwen_client.py`
 
-DashScope OpenAI-compatible client 封装：
-
-- 读取 API Key
-- 兼容多种环境变量名
-- 构造 `OpenAI(base_url=...)`
-- 基础 JSON 解析和通用调用辅助
-
-### `teacher_images.py`
-
-老师答案 `.docx` 的本地图片提取缓存逻辑：
-
-- 读取 Word 中的嵌入图片
-- 以段落中的 `"Solution"` 为分隔线
-- 分隔线前的图片视为题目图
-- 分隔线后的图片视为解答图
-- 转为灰度 PNG
-- 缓存到 `data/teacher/<answer_file_id>/...`
+DashScope OpenAI-compatible client 封装。当前只被已停用的旧文本/spec 链路（`grading.py`、`teacher_spec.py`、`student_parsing.py`）引用，**不**被当前正式批改链路（`grading_provider.py`/`grading_service.py`）使用——Qwen 作为视觉批改的备选供应商时，走的是 `grading_provider.py` 里独立的 `OpenAI` 客户端构造，不经过这个文件。
 
 ### `student_images.py`
 
@@ -345,34 +351,31 @@ Pydantic 请求/响应模型，定义了前端依赖的 JSON 契约。
 项目里实际出现的 submission 状态：
 
 - `uploaded`
-  - 上传成功，且文件已成功上传到 DashScope
+  - 文件已成功落盘。上传流程**不再**涉及 DashScope 或任何远程文件 ID——`qwen_file_id` 字段仍在表结构里，但新上传的 submission 始终把它写为 `null`。
 - `failed_upload`
-  - 文件本地落盘成功，但上传到 DashScope 失败
+  - 保留状态，仍在 `GRADABLE_STATUSES` 里（可被重新批改），但当前上传代码路径不会再主动把 submission 置为这个状态：上传校验失败时会在文件落盘前直接返回 HTTP 错误，不创建 submission 记录。保留它主要是兼容旧数据 / 未来可能的失败场景。
 - `grading`
-  - 正在批改
+  - 已被 `claim_for_grading()` 原子性地占用，正在后台任务里批改。应用重启时若发现 submission 卡在这个状态，会被 `reset_stuck_grading_submissions()` 重置为 `failed_grading`。
 - `graded`
-  - 所有题都已自动评分
+  - 所有题都已自动评分完成，或人工复核已全部处理完（见 §7.6 的 `PUT /submissions/{id}/questions/{question_number}`）。
 - `needs_manual_review`
-  - 至少有一题无法确认匹配或不适合自动评分
+  - 至少有一题无法确认匹配、不适合自动评分，或人工复核尚未处理完。
 - `failed_grading`
-  - 本地预处理、模型调用或结果入库失败
+  - 本地预处理、模型调用或结果入库失败；也会在服务重启导致批改中断时被设置（错误信息固定为“服务重启导致批改中断，请重新发起批改。”）。
 
-### 5.2 官方答案 DOCX 格式规则
+### 5.2 官方答案文件格式规则
 
-当前格式要求非常关键：
+当前格式要求：
 
-- 文件必须是有效 `.docx`
-- 文档内必须存在一行包含 `"Solution"` 的段落
-- `Solution` 之前的嵌入图片视为“题目图”
-- `Solution` 之后的嵌入图片视为“解答图”
+- 文件必须是 `.docx` 或 `.pdf`，且是有效、非空的文件（内容与扩展名要匹配，否则上传时就会被拒绝）。
+- **没有任何特殊排版要求**——不需要包含 `"Solution"` 分隔段落，也不需要区分“题目区”和“解答区”。系统只是把整份文件的每一页渲染成图片，交给视觉模型自己做题目匹配和评分。
 
 常见失败原因：
 
-- 空 docx
-- 损坏的 docx
-- 没有 `Solution` 分隔行
-- `Solution` 前没有题目图片
-- `Solution` 后没有解答图片
+- 空文件
+- 损坏的 docx / pdf
+- 文件内容与扩展名不匹配（比如把 `.docx` 改名成 `.pdf`）
+- docx 转换 PDF 时找不到 LibreOffice（`soffice`），本地/自建部署环境需要单独安装
 
 ### 5.3 学生 PDF 规则
 
@@ -394,56 +397,60 @@ Pydantic 请求/响应模型，定义了前端依赖的 JSON 契约。
 
 ## 6. 当前正式批改链路细节
 
-这一段对应 `qwen_service.py` 的真实实现。
+这一段对应 `grading_service.py` 的真实实现。批改现在是**异步**的：老师点击发起批改后，接口立即返回 202，下面这些步骤都发生在 FastAPI `BackgroundTasks` 里。
 
-### 6.1 老师答案预处理
+### 6.1 发起批改：占用 submission
 
-`ensure_teacher_images(answer_file_id, docx_path)` 会：
+`claim_for_grading(db, submission_id)`（`grading_service.py`）：
 
-1. 检查缓存是否可复用
-2. 读取 `.docx`
-3. 以 `"Solution"` 分隔题目区和解答区
-4. 从 paragraph run 中提取嵌入图片
-5. 转灰度 PNG
-6. 写入：
-   - `data/teacher/<answer_file_id>/questions/q_*.png`
-   - `data/teacher/<answer_file_id>/solutions/s_*.png`
-7. 写 `source_meta.json` 记录源文件指纹与 extractor version
+1. 用 `SELECT ... FOR UPDATE` 锁住这一行，防止并发的批改请求互相打架
+2. 只有当前状态在 `GRADABLE_STATUSES = {uploaded, failed_grading, failed_upload, needs_manual_review}` 里才允许转换；否则抛 409
+3. 把状态置为 `grading`，清空 `error_message`
 
-### 6.2 学生提交预处理
+`main.py` 的 `POST /submissions/{id}/grade` 和 `POST /assignments/{id}/grade-all` 在请求线程里调用 `claim_for_grading()`，然后把真正的批改通过 `background_tasks.add_task(run_grading_job, ...)` / `run_grading_batch(...)` 丢给后台，自己立即返回 `GradeStartResponse` / `GradeAllStartResponse`（202）。
 
-`export_student_pdf_to_images(submission_id, pdf_path)` 会：
+### 6.2 老师答案预处理（页面图片渲染）
+
+`ensure_answer_page_images(answer_file_id, answer_path)` 会：
+
+1. 检查 `data/teacher/<answer_file_id>/pages/` 下的缓存是否可复用（比较源文件的 mtime + 大小指纹和缓存版本号）
+2. 如果答案文件是 `.docx`：先校验是有效 docx，再用 `file_processor.convert_docx_to_pdf()`（需要本机能找到 LibreOffice `soffice`）转成临时 PDF
+3. 如果答案文件是 `.pdf`：跳过转换，直接使用
+4. 用 `PyMuPDF`（`fitz`，200 DPI）把 PDF 逐页渲染成 `page_1.png`, `page_2.png`, ...
+5. 写 `source_meta.json` 记录源文件路径、指纹和缓存版本号，供下次复用判断
+
+不再有“以 `Solution` 分隔题目区/解答区”这一步——整份文档的所有页面都会被当成答案图片交给模型。
+
+### 6.3 学生提交预处理
+
+`export_student_pdf_to_images(submission_id, pdf_path)`（`student_images.py`）会：
 
 1. 打开 PDF
 2. 对每页用 `fitz.Matrix(3, 3)` 渲染
-3. 转灰度 PNG
-4. 写入 `data/tmp/submissions/<submission_id>/page_*.png`
+3. 写入 `data/tmp/submissions/<submission_id>/page_*.png`
 
-批改结束后，这些学生临时 PNG 会被清理掉。
+批改结束后（无论成功还是失败），这些学生临时 PNG 都会被 `cleanup_student_tmp_images()` 清理掉。
 
-### 6.3 视觉模型输入顺序
+### 6.4 视觉模型调用
 
-模型消息固定按三组图片输入：
+`auto_grade_homework()` 把老师答案页面图片和学生作答页面图片都转成 base64 data URL，交给 `grading_provider.call_grading_model(answer_images, student_images)`：
 
-1. 老师题目图
-2. 老师解答图
-3. 学生作答图
+- 消息里先放全部老师答案页面图片，再放全部学生作答页面图片（不再区分“题目图”/“解答图”两组）
+- 调用当前激活供应商（`GRADING_PROVIDER`，默认 `doubao`）对应的 OpenAI 兼容接口，`temperature=0`，失败自动重试最多 3 次
+- 系统 prompt 要求模型：
+  - 先做题目内容匹配，不依赖题号
+  - 只有确认匹配成功时才允许自动评分
+  - 匹配失败或证据不足时必须标记人工复核（`auto_graded=false`, `score=null`, `is_correct=null`）
+  - 输出必须是严格 JSON，不能有 Markdown 或多余文字
 
-系统 prompt 要求模型：
+### 6.5 结果归一化
 
-- 先做题目内容匹配，不依赖题号
-- 只有确认匹配成功时才允许自动评分
-- 匹配失败或证据不足时必须标记人工复核
-- 输出必须是严格 JSON
-
-### 6.4 结果归一化
-
-模型返回后，后端会：
+模型返回后，`_normalize_vision_result()` 会：
 
 - 为每题生成稳定的 `question_number`
 - 归一化 `question_id`
-- 规范 `question_match_confidence`
-- 处理 `auto_graded` / `is_correct` / `score`
+- 规范 `question_match_confidence`（裁剪到 0~1）
+- 处理 `auto_graded` / `is_correct` / `score`（`question_match=false` 时强制 `auto_graded=false`）
 - 计算：
   - `total_score`
   - `max_total_score`
@@ -451,19 +458,16 @@ Pydantic 请求/响应模型，定义了前端依赖的 JSON 契约。
   - `manual_review_count`
   - `needs_manual_review`
 
-### 6.5 数据库存储策略
+### 6.6 数据库存储策略
 
-`grade_one_submission()` 会：
+`grade_claimed_submission(db, submission_id)` 会（此时 submission 已经是 `grading` 状态）：
 
-1. 先把 submission 置为 `grading`
-2. 调用 `auto_grade_homework()`
-3. 写 `grade_results.raw_json`
-4. 删除旧的 `GradeQuestion`
-5. 只为可自动评分题目写新的 `GradeQuestion`
-6. 根据结果把 submission 置为：
-   - `graded`
-   - 或 `needs_manual_review`
-7. 若任何步骤失败，则置为 `failed_grading`
+1. 调用 `auto_grade_homework()`
+2. 写 `grade_results.raw_json`（保存完整归一化结果，包括需要人工复核的题目）
+3. 删除旧的 `GradeQuestion`
+4. 只为 `score`/`is_correct` 都非空的题目写新的 `GradeQuestion`
+5. 根据结果把 submission 置为 `graded` 或 `needs_manual_review`
+6. 若任何步骤失败（`RuntimeError`、`OpenAIError`、DB 异常等），置为 `failed_grading` 并写入中文错误信息——这个函数本身**不抛异常**，所有失败都被捕获并写回 DB，因为它是从后台任务里调用的，没有 HTTP 请求可以返回错误给前端
 
 ## 7. HTTP API 速查
 
@@ -488,11 +492,17 @@ Pydantic 请求/响应模型，定义了前端依赖的 JSON 契约。
 
 - `POST /teachers/me/courses`
 - `GET /teachers/me/courses`
+- `DELETE /courses/{course_id}`
+  - 级联删除该课程下全部作业、学生、提交与批改结果，不可恢复
 - `POST /courses/{course_id}/join-link`
 - `GET /courses/join/{join_token}`
 - `POST /courses/join/{join_token}/register`
 - `GET /courses/{course_id}/students`
 - `POST /courses/{course_id}/students`
+- `DELETE /courses/{course_id}/students/{student_id}`
+  - 级联删除该学生的全部提交与批改结果，不可恢复
+- `POST /courses/{course_id}/students/{student_id}/password`
+  - 老师重置学生密码（`StudentPasswordResetRequest.new_password`，至少 8 位），重置后学生须用新密码登录
 
 ### 7.4 作业
 
@@ -500,6 +510,8 @@ Pydantic 请求/响应模型，定义了前端依赖的 JSON 契约。
 - `GET /courses/{course_id}/assignments`
 - `GET /assignments`
 - `GET /students/me/assignments`
+- `DELETE /assignments/{assignment_id}`
+  - 级联删除该作业下全部提交与批改结果、以及官方答案文件，不可恢复
 
 ### 7.5 文件上传
 
@@ -514,10 +526,17 @@ Pydantic 请求/响应模型，定义了前端依赖的 JSON 契约。
 ### 7.6 批改与结果
 
 - `POST /submissions/{submission_id}/grade`
+  - 返回 **202**（`GradeStartResponse`），批改本身在后台任务里异步执行，不是同步完成
 - `POST /assignments/{assignment_id}/grade-all`
+  - 返回 **202**（`GradeAllStartResponse`），同样异步；跳过当前状态不在 `GRADABLE_STATUSES` 里的 submission（即 `graded`/`grading`）
 - `GET /assignments/{assignment_id}/submissions`
 - `GET /assignments/{assignment_id}/students-status`
 - `GET /submissions/{submission_id}/result`
+  - 老师查看某份提交的逐题结果
+- `PUT /submissions/{submission_id}/questions/{question_number}`
+  - 老师人工改分（`QuestionOverrideRequest`: `score` / `is_correct` / 可选 `comment`），会重新计算 `total_score`；当该 submission 不再有题目需要人工复核时，状态自动变为 `graded`
+- `GET /students/me/submissions/{submission_id}/result`
+  - 学生查看自己某份提交的逐题结果
 
 ## 8. 前端实际交互逻辑
 
@@ -591,19 +610,23 @@ data/
 
 注意：`DATABASE_URL` 在 `db.py` 导入时就必须存在，否则应用启动直接报错。
 
-#### 真正调用 DashScope/Qwen 评分时还需要
+#### 真正调用视觉模型评分时还需要
 
+- `ARK_API_KEY`
+  - **默认供应商（豆包/方舟 ARK）必需**。未配置时 `grading_provider.call_grading_model()` 会直接抛出“未配置 ARK_API_KEY，无法调用豆包批改。”
 - `DASHSCOPE_API_KEY`
-
-代码还兼容以下别名：
-
-- `DASSCOPE_API_KEY`
-- `DASHSCOPE_APIKEY`
-- `QWEN_API_KEY`
-- `OPENAI_API_KEY`
+  - 仅当 `GRADING_PROVIDER=qwen`（切到 Qwen 备选供应商）时才需要。注意：这条路径下 `grading_provider.py` 只读取精确的 `DASHSCOPE_API_KEY` 这一个变量名，**不**兼容 `qwen_client.py` 里给旧文本链路用的那些别名（`DASSCOPE_API_KEY` / `DASHSCOPE_APIKEY` / `QWEN_API_KEY` / `OPENAI_API_KEY`）。
 
 ### 10.2 常用变量
 
+- `GRADING_PROVIDER`
+  - `doubao`（默认）或 `qwen`，选择当前激活的视觉批改供应商
+- `DOUBAO_VISION_MODEL`
+  - 豆包视觉模型名，默认 `doubao-seed-2-1-turbo-260628`
+- `ARK_BASE_URL`
+  - 默认是 `https://ark.cn-beijing.volces.com/api/v3`
+- `TEACHER_SIGNUP_CODE`
+  - 教师注册邀请码；不设置则该校验完全关闭（可选功能，不是所有部署都需要开启）
 - `FRONTEND_BASE_URL`
   - 用于生成学生加入链接
 - `CORS_ALLOW_ORIGINS`
@@ -611,16 +634,21 @@ data/
   - 不允许使用 `*`
 - `APP_DATA_DIR`
   - 运行时文件目录
-- `QWEN_VISION_MODEL`
-  - 视觉模型名
-- `QWEN_PLUS_MODEL`
-  - 辅助模型名
-- `DASHSCOPE_BASE_URL`
-  - 默认是 DashScope OpenAI-compatible URL
+- `SOFFICE_PATH`
+  - 手动指定 LibreOffice `soffice` 可执行文件路径（docx 转 PDF 需要）
 - `ACCESS_TOKEN_EXPIRE_MINUTES`
 - `AUTH_ALGORITHM`
 - `PASSWORD_HASH_ITERATIONS`
 - `SQLALCHEMY_ECHO`
+
+#### 仅 Qwen 备选供应商相关（`GRADING_PROVIDER=qwen` 时才用得到）
+
+- `QWEN_VISION_MODEL`
+  - 视觉模型名，默认 `qwen-vl-max`
+- `DASHSCOPE_BASE_URL`
+  - 默认是 DashScope OpenAI-compatible URL
+- `QWEN_PLUS_MODEL`
+  - 仍被 `qwen_client.py` 读取，但 `qwen_client.py` 当前只被已停用的旧文本/spec 链路引用，**不属于**当前正式视觉批改路径
 
 ### 10.3 本地辅助变量
 
@@ -643,7 +671,7 @@ data/
 export DATABASE_URL=sqlite:///./local_dev.sqlite3
 export AUTH_SECRET_KEY='replace-with-a-long-random-secret'
 export FRONTEND_BASE_URL='http://localhost:5173'
-export DASHSCOPE_API_KEY='your-real-key'
+export ARK_API_KEY='your-real-key'
 ```
 
 安装依赖并迁移数据库：
@@ -705,10 +733,11 @@ python3 -m pytest -q tests --cov --cov-report=term-missing --cov-report=html
 
 ```bash
 RUN_EXTERNAL_SMOKE=1 \
-QWEN_VISION_MODEL=<your_vision_model> \
-DASHSCOPE_API_KEY=<your_real_key> \
+ARK_API_KEY=<your_real_key> \
 python3 -m pytest -q tests/test_external_smoke.py -m external_smoke -o addopts=''
 ```
+
+`tests/test_external_smoke.py` 现在校验的是 `ARK_API_KEY`（豆包/方舟 ARK，默认供应商），不是 `DASHSCOPE_API_KEY`；只设置 `RUN_EXTERNAL_SMOKE=1` 而不设 `ARK_API_KEY` 会被直接跳过，并提示需要 `ARK_API_KEY`。
 
 ### 12.4 测试主要覆盖什么
 
@@ -738,35 +767,39 @@ python3 -m pytest -q tests/test_external_smoke.py -m external_smoke -o addopts='
 
 ### 13.1 Blueprint 概况
 
-- Web service：`mathhomeworkautomarker-backend`
+后端现在是 **Docker** 部署，不是 Render 原生 Python runtime。详细原因和完整清单以 [`docs/render_deploy.md`](docs/render_deploy.md) 为准，这里只列要点：
+
+- Web service：`mathhomeworkautomarker-backend`，`runtime: docker`（构建自仓库根目录的 `Dockerfile`），plan `starter`
+- 之所以换成 Docker：LibreOffice（docx→PDF 转换需要）不是 pip 包，Render 原生 Python runtime 装不了系统包；`Dockerfile` 基于 `python:3.11-slim` 额外装了 `libreoffice-writer` 和 `fonts-noto-cjk`（缺中文字体会导致转换出的 PDF 里中文变成方块）
+- 因为整个应用现在打包成镜像，`render.yaml` 里后端**没有** `buildCommand` / `startCommand`——镜像构建和 `Dockerfile` 里的 `CMD` 取代了两者
 - Region：`singapore`
-- Persistent disk：挂载到 `/var/data/mathhomeworkautomarker`
-- `APP_DATA_DIR` 指向这个挂载目录
+- Persistent disk：挂载到 `/var/data/mathhomeworkautomarker`，`APP_DATA_DIR` 指向这个挂载目录
 - `preDeployCommand`：`alembic upgrade head`
-- `startCommand`：`uvicorn main:app --host 0.0.0.0 --port $PORT`
+- 前端是独立的 Render 静态站点（`runtime: static`），构建命令 `cd frontend && npm ci && npm run build`，发布目录 `frontend/dist`
 
 ### 13.2 部署时必须注意
 
-- `DASHSCOPE_API_KEY` 需要手动配置
+- `ARK_API_KEY` 需要手动配置（默认供应商豆包/方舟必需）
+- `DASHSCOPE_API_KEY` 仅当把 `GRADING_PROVIDER` 切到 `qwen` 备选供应商时才需要手动配置
 - `FRONTEND_BASE_URL` 建议配置，否则 join link 会指向默认本地地址
 - `CORS_ALLOW_ORIGINS` 建议显式配置，不能写 `*`
 - 数据库迁移依赖 `DATABASE_URL`
 
 ## 14. CI
 
-GitHub Actions 文件在 `.github/workflows/backend-tests.yml`。
+GitHub Actions 有两个独立的工作流文件：
+
+- `.github/workflows/backend-tests.yml`
+- `.github/workflows/frontend-build.yml`
 
 当前 CI 做的事：
 
-- Python 3.11
-- 安装 `requirements.txt`
-- 安装 `poppler-utils`
-- 运行 `python3 -m pytest -q tests`
+- 后端：Python 3.11，安装 `requirements.txt`，安装 `poppler-utils`，运行 `python3 -m pytest -q tests`
+- 前端：Node 20，`cd frontend && npm ci && npm run build`，验证前端能正常构建
 
 当前 CI 不做的事：
 
-- 不跑真实 DashScope/Qwen 调用
-- 不验证前端构建
+- 不跑真实豆包/Qwen 视觉模型调用
 - 不执行部署
 
 ## 15. 已知实现约束与坑点
@@ -788,9 +821,9 @@ GitHub Actions 文件在 `.github/workflows/backend-tests.yml`。
 
 `CORS_ALLOW_ORIGINS=*` 会抛错，而不是降级放行。
 
-### 15.4 老师 DOCX 强依赖 `Solution` 分隔行
+### 15.4 官方答案文件格式已放宽
 
-这是当前格式约束，不是文档建议。缺少这行，正式批改会直接失败。
+不再要求老师文档里有 `"Solution"` 分隔行——答案文件只需是有效的 `.docx` 或 `.pdf`，内容和排版都没有特殊要求，系统会把整份文档渲染成页面图片交给视觉模型自己做题目匹配。docx 官方答案在本地/自建部署时仍然需要能找到 LibreOffice（`soffice`）用于转 PDF，这是新的前置条件，不是文档建议。
 
 ### 15.5 前端契约比看起来更硬
 
@@ -816,8 +849,8 @@ GitHub Actions 文件在 `.github/workflows/backend-tests.yml`。
 1. `main.py`
 2. `models.py`
 3. `schemas.py`
-4. `qwen_service.py`
-5. `teacher_images.py`
+4. `grading_provider.py`
+5. `grading_service.py`
 6. `student_images.py`
 7. `frontend/src/api.ts`
 8. `frontend/src/teacher/TeacherWorkspaceContext.tsx`
@@ -832,8 +865,9 @@ GitHub Actions 文件在 `.github/workflows/backend-tests.yml`。
 
 优先看：
 
-- `qwen_service.py`
-- `teacher_images.py`
+- `grading_provider.py`
+- `grading_service.py`
+- `file_processor.py`
 - `student_images.py`
 - `tests/test_grading_flow.py`
 - `tests/test_offline_file_processing.py`
@@ -870,7 +904,8 @@ GitHub Actions 文件在 `.github/workflows/backend-tests.yml`。
 最可信的是：
 
 - `main.py`
-- `qwen_service.py`
+- `grading_provider.py`
+- `grading_service.py`
 - `models.py`
 - `tests/`
 
@@ -898,10 +933,11 @@ GitHub Actions 文件在 `.github/workflows/backend-tests.yml`。
 
 - 任意格式 Word/图片/PDF 的鲁棒通用解析
 - 多课程共享学生账号模型
-- 复杂人工复核工作流
-- 异步任务队列、后台任务追踪、并发批改治理
 - 真正多租户 SaaS 级别的权限、审计和运营后台
+- 大规模并发批改场景下的专业任务队列（当前是 FastAPI `BackgroundTasks` + 简单的 `SELECT ... FOR UPDATE` 占用锁，够用但不是 Celery/RQ 那种正经任务队列）
+
+> 说明：批改在后台异步执行、前端轮询状态、`claim_for_grading()` 防止并发批改同一份提交，这些已经实现，不再是“暂时不适合”的范围。
 
 ## 19. 一句话总结
 
-这是一个以 `FastAPI + React` 为壳、以 `DOCX/PDF 本地预处理 + DashScope/Qwen 视觉模型` 为核心的数学作业自动批改系统；当前正式链路明确、测试较全、前后端契约稳定，但文件格式约束严格，且旧文本链路只是保留参考，不是主流程。
+这是一个以 `FastAPI + React` 为壳、以 `DOCX/PDF 本地预处理 + 豆包（方舟 ARK，默认）/ Qwen（备选）视觉模型` 为核心的数学作业自动批改系统；批改在后台异步执行，前端定时轮询状态；当前正式链路明确、测试较全、前后端契约稳定，官方答案文件格式约束已经放宽（.docx / .pdf 均可，无需特殊排版），旧文本链路只是保留参考，不是主流程。
