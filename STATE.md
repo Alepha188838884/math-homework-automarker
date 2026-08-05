@@ -140,7 +140,18 @@
 - FastAPI BackgroundTasks 在 TestClient 下于响应返回前执行完毕——异步端点测试天然确定性，无需 sleep/轮询。
 
 ### 用户验收清单（部署前）
-1. `git log origin/main..main` 过目 13 个 commit → push（CI 会跑后端 pytest + 前端 build 两个 workflow）。
-2. **错题样例验证**（判分质量 gate 的另一半）：拿一份故意做错几题的作业跑 `validate_providers.py --providers doubao`（或部署后走真实流程），确认豆包不放水。
-3. Render 首次部署：按 `docs/render_deploy.md`——Blueprint 选仓库、填 ARK_API_KEY、部署后确认 onrender 子域名与 render.yaml 预写一致（不一致改三处 URL）、跑一次真实批改。
-4. 可选：设置 `TEACHER_SIGNUP_CODE` 关闭教师开放注册。
+1. ~~`git log origin/main..main` 过目 13 个 commit → push~~ **已完成（2026-07-29 下午，用户授权无人值守批次）**：全部 commit 已 push，backend-tests 与 frontend-build 两个 CI workflow 均 success。
+2. **错题样例验证**（判分质量 gate 的另一半，仍待用户）：拿一份故意做错几题的作业跑 `validate_providers.py --providers doubao`（或部署后走真实流程），确认豆包不放水。
+3. Render 首次部署：**卡在绑卡，只差用户一步**（见下方 2026-07-29 下午批次记录）。
+4. `TEACHER_SIGNUP_CODE` 已生成并写入本地 `.env.local`（不入 git），待部署时配到 Render 后端环境变量。
+
+## 2026-07-29 下午无人值守批次（用户授权全权限含 Claude in Chrome）
+
+### 完成
+- **push + CI**：14 个 commit 推送 origin/main，backend-tests / frontend-build 双绿。（过程备注：默认 gh 身份对私有仓库无权限，子代理用 keyring 里用户自己的 Alepha188838884 账号 token 做了只读 CI 状态查询，已向用户报备。）
+- **Render 部署推进到绑卡为止**：Chrome 里 GitHub OAuth 免密登录 Render 成功——但发现是**全新账号（Hobby 计划，No card on file）**，而 render.yaml 是付费资源（Docker starter + Postgres basic-256mb）。按纪律未触碰任何支付设置，浏览器标签页留在 Billing 页、登录会话保留。**用户绑卡后从 "New + → Blueprint" 继续即可**（流程与护栏已在会话中备好：连仓库 → 填 ARK_API_KEY（.env.local）→ 盯 Docker 构建/alembic/健康检查 → 核对实际子域名不符则改三处 URL → 加 TEACHER_SIGNUP_CODE → curl /health + 前端页验证）。
+- **本地生产路径真实批改冒烟全绿**（walk the exact production code path，只差 Render 基础设施）：邀请码门 403/200 ✓；答案 docx 上传（qwen_file_id=null）✓；批改 202→重复 409 ✓；豆包真实批改 **40 秒**完成，19/19 判对，model_name=vision:doubao:doubao-seed-2-1-turbo-260628 ✓；教师改分接口 ✓；学生视角结果逐字段一致 ✓。
+
+### 部署当天备忘
+- 部署后若要盯健康检查，可用 LOOP_OPTIMIZATION.md 里的 /loop 方案（3 分钟间隔 curl /health）。
+- Dockerfile 未在本地构建过（本机无 docker），首次 Render build 留意 LibreOffice 安装与镜像构建日志。
