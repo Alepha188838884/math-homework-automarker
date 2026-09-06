@@ -154,4 +154,14 @@
 
 ### 部署当天备忘
 - 部署后若要盯健康检查，可用 LOOP_OPTIMIZATION.md 里的 /loop 方案（3 分钟间隔 curl /health）。
-- Dockerfile 未在本地构建过（本机无 docker），首次 Render build 留意 LibreOffice 安装与镜像构建日志。
+- ~~Dockerfile 未在本地构建过~~ 已由 CI 验证（见 2026-09-06 记录）。
+
+## 2026-09-06 会话记录（用户授权无人值守批次 #2）
+
+### 完成
+- **错题样例验证 gate 已关闭**：用户口头确认已完成（仓库内无结果文件留存，`validate_results*.json` 已被清理）。判分质量双 gate（满分样例 + 错题样例）至此全部通过。
+- **Docker 镜像首次真实构建验证**：新增 `.github/workflows/docker-build.yml`（push main + workflow_dispatch，`docker build` 最简验证），commit `91c3c73` 推送后一次成功（~64 秒，libreoffice-writer + fonts-noto-cjk 安装干净）。同 push 的 backend-tests / frontend-build 亦 success。部署链上最后一个未验证环节消除。
+- **Render 部署第二次尝试，仍卡绑卡**：GitHub OAuth 免密登录成功；只读排查确认该登录身份下**仅一个 workspace**（My Workspace，Hobby，"No card on file"），无备选已绑卡账号；Render 账号邮箱为 haoyu.huang.2027@huilieducation.cn（GitHub 身份邮箱）。按纪律未触碰支付设置，未开始 Blueprint。
+
+### 唯一待用户动作
+在 Render dashboard（浏览器已留登录会话）Billing 页绑定付款方式 → 告诉 Claude"继续部署"。后续全流程（Blueprint 连仓库 → 填 ARK_API_KEY → 盯构建/迁移/健康检查 → 子域名核对 → 配 TEACHER_SIGNUP_CODE → /health 与前端终验 → 生产真实批改冒烟+清理测试数据）规格已备好，无需用户参与。
