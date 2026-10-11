@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import threading
 from pathlib import Path
 
 import fitz
@@ -420,6 +421,75 @@ def test_ensure_answer_page_images_renders_and_caches_valid_pdf(local_processing
         assert page_image.size[0] >= 500
         assert page_image.size[1] >= 500
         assert nonwhite_bbox is not None
+
+
+def test_ensure_answer_page_images_concurrent_calls_for_same_answer_file_are_safe(
+    local_processing_roots,
+):
+    # Simulates concurrent batch grading hitting a cold cache for the same
+    # answer_file_id at once: every thread should succeed and agree on the
+    # same rendered page list, instead of racing on shutil.rmtree.
+    results: list[list[str]] = []
+    errors: list[BaseException] = []
+    results_lock = threading.Lock()
+
+    def worker() -> None:
+        try:
+            pages = grading_service.ensure_answer_page_images(
+                46,
+                str(fixture_path("valid_submission.pdf")),
+            )
+        except BaseException as exc:  # noqa: BLE001
+            with results_lock:
+                errors.append(exc)
+            return
+        with results_lock:
+            results.append(pages)
+
+    threads = [threading.Thread(target=worker) for _ in range(5)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert len(results) == 5
+    assert all(pages == results[0] for pages in results)
+    assert Path(results[0][0]).exists()
+
+
+def test_ensure_answer_page_images_recovers_from_mid_rebuild_cache_read_error(
+    local_processing_roots,
+    monkeypatch,
+):
+    # Reproduces the race where the unlocked fast-path cache check reads the
+    # pages directory while another thread is mid-rebuild (post-rmtree,
+    # pre-rewrite) and gets a FileNotFoundError instead of a clean miss. The
+    # unlocked check must swallow that and fall through to the locked path
+    # instead of letting the exception escape to the caller.
+    pages = grading_service.ensure_answer_page_images(
+        47,
+        str(fixture_path("valid_submission.pdf")),
+    )
+
+    original_check = grading_service._check_cached_answer_pages
+    call_count = {"n": 0}
+
+    def flaky_check(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise FileNotFoundError("cache dir disappeared mid-rebuild")
+        return original_check(*args, **kwargs)
+
+    monkeypatch.setattr(grading_service, "_check_cached_answer_pages", flaky_check)
+
+    recovered_pages = grading_service.ensure_answer_page_images(
+        47,
+        str(fixture_path("valid_submission.pdf")),
+    )
+
+    assert call_count["n"] == 2
+    assert recovered_pages == pages
 
 
 def test_ensure_answer_page_images_docx_answer_uses_convert_docx_to_pdf(

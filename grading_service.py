@@ -5,8 +5,11 @@ import hashlib
 import json
 import logging
 import mimetypes
+import os
 import shutil
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -34,6 +37,26 @@ TEACHER_CACHE_ROOT = get_app_data_dir() / "teacher"
 CACHE_META_FILENAME = "source_meta.json"
 CACHE_META_VERSION = "answer-page-image-v1"
 ANSWER_PAGE_DPI = 200
+
+
+def _read_grading_batch_concurrency() -> int:
+    # Read once at import time. The right value depends on the ARK account's
+    # rate-limit quota, which the code has no way to know, so it's exposed as
+    # an env var instead of hardcoded.
+    raw = os.getenv("GRADING_BATCH_CONCURRENCY", "")
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return 4
+    return value if value >= 1 else 4
+
+
+GRADING_BATCH_CONCURRENCY = _read_grading_batch_concurrency()
+
+# Guards the teacher answer page-image cache (ensure_answer_page_images)
+# against concurrent rebuilds of the same answer_file_id racing on the
+# same on-disk directory.
+_ANSWER_CACHE_LOCK = threading.Lock()
 
 
 def _bool_from_any(value: Any) -> bool:
@@ -341,6 +364,22 @@ def _render_pdf_pages(pdf_path: str, pages_dir: Path) -> None:
         document.close()
 
 
+def _check_cached_answer_pages(
+    pages_dir: Path, meta_path: Path, source_path: Path, source_fingerprint: str
+) -> list[str] | None:
+    cached_pages = _list_page_image_paths(pages_dir)
+    cache_meta = _read_cache_meta(meta_path)
+    if (
+        cached_pages
+        and cache_meta is not None
+        and cache_meta.get("source_path") == str(source_path)
+        and cache_meta.get("source_fingerprint") == source_fingerprint
+        and cache_meta.get("version") == CACHE_META_VERSION
+    ):
+        return cached_pages
+    return None
+
+
 def ensure_answer_page_images(answer_file_id: int, answer_path: str) -> list[str]:
     """Ensure the teacher answer file (docx or pdf) is rendered to cached page PNGs.
 
@@ -359,47 +398,51 @@ def ensure_answer_page_images(answer_file_id: int, answer_path: str) -> list[str
     pages_dir = answer_dir / "pages"
     meta_path = answer_dir / CACHE_META_FILENAME
 
-    cached_pages = _list_page_image_paths(pages_dir)
-    cache_meta = _read_cache_meta(meta_path)
-    if (
-        cached_pages
-        and cache_meta is not None
-        and cache_meta.get("source_path") == str(source_path)
-        and cache_meta.get("source_fingerprint") == source_fingerprint
-        and cache_meta.get("version") == CACHE_META_VERSION
-    ):
+    try:
+        # Unlocked fast path: another thread holding _ANSWER_CACHE_LOCK may
+        # be mid-rebuild (rmtree'd the directory but not finished writing
+        # it back), so a read here can raise; treat that as a cache miss.
+        cached_pages = _check_cached_answer_pages(pages_dir, meta_path, source_path, source_fingerprint)
+    except OSError:
+        cached_pages = None
+    if cached_pages is not None:
         return cached_pages
 
-    if pages_dir.exists():
-        shutil.rmtree(pages_dir)
-    pages_dir.mkdir(parents=True, exist_ok=True)
+    with _ANSWER_CACHE_LOCK:
+        cached_pages = _check_cached_answer_pages(pages_dir, meta_path, source_path, source_fingerprint)
+        if cached_pages is not None:
+            return cached_pages
 
-    try:
-        suffix = source_path.suffix.lower()
-        if suffix == ".docx":
-            try:
-                document = Document(str(source_path))
-                _ = document.paragraphs
-            except (PackageNotFoundError, BadZipFile, ValueError) as exc:
-                raise RuntimeError("老师答案 Word 文件无效，请检查文件是否为有效且非空的 .docx。") from exc
+        if pages_dir.exists():
+            shutil.rmtree(pages_dir)
+        pages_dir.mkdir(parents=True, exist_ok=True)
 
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                pdf_path = convert_docx_to_pdf(str(source_path), tmp_dir)
-                _render_pdf_pages(pdf_path, pages_dir)
-        elif suffix == ".pdf":
-            _render_pdf_pages(str(source_path), pages_dir)
-        else:
-            raise RuntimeError(f"不支持的官方答案文件格式: {suffix}")
+        try:
+            suffix = source_path.suffix.lower()
+            if suffix == ".docx":
+                try:
+                    document = Document(str(source_path))
+                    _ = document.paragraphs
+                except (PackageNotFoundError, BadZipFile, ValueError) as exc:
+                    raise RuntimeError("老师答案 Word 文件无效，请检查文件是否为有效且非空的 .docx。") from exc
 
-        pages = _list_page_image_paths(pages_dir)
-        if not pages:
-            raise RuntimeError("老师答案文件未生成任何页面图片。")
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    pdf_path = convert_docx_to_pdf(str(source_path), tmp_dir)
+                    _render_pdf_pages(pdf_path, pages_dir)
+            elif suffix == ".pdf":
+                _render_pdf_pages(str(source_path), pages_dir)
+            else:
+                raise RuntimeError(f"不支持的官方答案文件格式: {suffix}")
 
-        _write_cache_meta(meta_path, source_path, source_fingerprint)
-        return pages
-    except Exception:
-        shutil.rmtree(answer_dir, ignore_errors=True)
-        raise
+            pages = _list_page_image_paths(pages_dir)
+            if not pages:
+                raise RuntimeError("老师答案文件未生成任何页面图片。")
+
+            _write_cache_meta(meta_path, source_path, source_fingerprint)
+            return pages
+        except Exception:
+            shutil.rmtree(answer_dir, ignore_errors=True)
+            raise
 
 
 def auto_grade_homework(
@@ -642,9 +685,16 @@ def run_grading_job(submission_id: int) -> None:
 
 
 def run_grading_batch(submission_ids: list[int]) -> None:
-    """Background-task entry point: grade multiple already-claimed submissions in order."""
-    for submission_id in submission_ids:
-        run_grading_job(submission_id)
+    """Background-task entry point: grade multiple already-claimed submissions concurrently.
+
+    Runs up to GRADING_BATCH_CONCURRENCY jobs in parallel (each with its own
+    DB session via run_grading_job) and blocks until all of them finish.
+    """
+    if not submission_ids:
+        return
+
+    with ThreadPoolExecutor(max_workers=min(GRADING_BATCH_CONCURRENCY, len(submission_ids))) as executor:
+        list(executor.map(run_grading_job, submission_ids))
 
 
 def reset_stuck_grading_submissions(db: Session) -> int:

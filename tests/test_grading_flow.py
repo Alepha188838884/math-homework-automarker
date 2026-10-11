@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 
 import grading_service
@@ -436,3 +438,29 @@ def test_reset_stuck_grading_submissions_marks_failed_with_restart_message(
         submission = db.get(Submission, submission_id)
         assert submission.status == "failed_grading"
         assert submission.error_message == "服务重启导致批改中断，请重新发起批改。"
+
+
+def test_run_grading_batch_runs_jobs_concurrently(monkeypatch):
+    # Force a concurrency level that fits the 3 stub ids below, regardless
+    # of whatever GRADING_BATCH_CONCURRENCY happens to be in this environment.
+    monkeypatch.setattr(grading_service, "GRADING_BATCH_CONCURRENCY", 3)
+
+    lock = threading.Lock()
+    state = {"current": 0, "max": 0}
+    processed: list[int] = []
+
+    def fake_run_grading_job(submission_id: int) -> None:
+        with lock:
+            state["current"] += 1
+            state["max"] = max(state["max"], state["current"])
+        time.sleep(0.2)
+        with lock:
+            state["current"] -= 1
+            processed.append(submission_id)
+
+    monkeypatch.setattr(grading_service, "run_grading_job", fake_run_grading_job)
+
+    grading_service.run_grading_batch([201, 202, 203])
+
+    assert state["max"] >= 2
+    assert sorted(processed) == [201, 202, 203]
