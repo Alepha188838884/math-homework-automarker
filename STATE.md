@@ -165,3 +165,17 @@
 
 ### 唯一待用户动作
 在 Render dashboard（浏览器已留登录会话）Billing 页绑定付款方式 → 告诉 Claude"继续部署"。后续全流程（Blueprint 连仓库 → 填 ARK_API_KEY → 盯构建/迁移/健康检查 → 子域名核对 → 配 TEACHER_SIGNUP_CODE → /health 与前端终验 → 生产真实批改冒烟+清理测试数据）规格已备好，无需用户参与。
+
+## 2026-10-11 会话记录：批改耗时实测 + 批量批改并发化
+
+### 完成
+- **单份批改耗时实测**（豆包 doubao-seed-2-1-turbo-260628，走生产代码路径，每样本 3 次真实调用，均首次成功）：L1（19 题，9 张图约 6.1MB）模型均值 36.9s（35.5–38.0），端到端约 38s；L2（5 题，7 张图约 4.9MB）均值 21.0s（19.1–23.2），端到端约 22s。模型调用占 >96%；学生 PDF 渲染约 1.4s，答案 docx 冷渲染 4–5s（之后缓存命中 <1ms）。
+- **批量批改限量并发**（未 commit 前经独立 verifier 两轮审查，终审 PASS）：`run_grading_batch` 由串行 for 循环改为 `ThreadPoolExecutor`（`with` 块阻塞到全部完成），并发数 `GRADING_BATCH_CONCURRENCY` 环境变量，默认 4（已写入 `.env.example`）。预计 30 人班从 10–20 分钟降到约 3–5 分钟（未实测）。
+- **修复答案缓存竞态**：`ensure_answer_page_images` 加全局 `_ANSWER_CACHE_LOCK` 双重检查；无锁快路径包 `try/except OSError` 视为未命中（verifier 首轮发现缓存失效重建时无锁读会抛 FileNotFoundError 导致误判失败）。
+- 测试 115 → 118 passed（新增：批量并发、并发冷缓存、重建中读失败可恢复的确定性测试）。
+
+### 已验证事实 / 教训
+- 慢的根源是批量串行，不是单份：单份 20–40s 对视觉模型属正常，本地代码已无可压缩空间；再提速只能减图（DPI）或换模型，需先测准确度。
+- 并发冷缓存测试对旧代码只有概率性检出（30 次失败 8 次）；要稳定回归检测需用 monkeypatch 注入异常的确定性测试。
+- `_ANSWER_CACHE_LOCK` 仅进程内有效；多 uvicorn worker 跨进程竞态为既有问题，未处理。
+- 合适的并发数取决于方舟账号限流额度，上线后若出现 429 应调低 `GRADING_BATCH_CONCURRENCY`。
