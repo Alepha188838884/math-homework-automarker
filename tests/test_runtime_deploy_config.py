@@ -93,22 +93,34 @@ def test_create_database_engine_uses_pre_ping_and_respects_echo(monkeypatch: pyt
 def test_normalize_database_url_rewrites_legacy_postgres_scheme():
     assert (
         db.normalize_database_url("postgres://u:p@h/db")
-        == "postgresql://u:p@h/db"
+        == "postgresql+psycopg2://u:p@h/db"
+    )
+
+
+def test_normalize_database_url_rewrites_driverless_postgresql_scheme():
+    assert (
+        db.normalize_database_url("postgresql://u:p@h/db")
+        == "postgresql+psycopg2://u:p@h/db"
     )
 
 
 def test_normalize_database_url_leaves_other_schemes_unchanged():
-    assert db.normalize_database_url("postgresql://u:p@h/db") == "postgresql://u:p@h/db"
+    assert (
+        db.normalize_database_url("postgresql+psycopg2://u:p@h/db")
+        == "postgresql+psycopg2://u:p@h/db"
+    )
     assert db.normalize_database_url("sqlite:///./local.db") == "sqlite:///./local.db"
 
 
 def test_create_database_engine_accepts_legacy_postgres_scheme_without_error():
-    # Render's fromDatabase.connectionString hands out postgres://, which the
-    # SQLAlchemy version pinned in this repo raises NoSuchModuleError for
-    # unless normalized first. create_engine defers the actual connection,
-    # so building the engine here never touches a real database.
+    # Render's fromDatabase.connectionString hands out postgres://, and a bare
+    # postgresql:// names no driver either. SQLAlchemy 2.1 changed the default
+    # driver for both to psycopg (v3), which this repo doesn't depend on, so
+    # normalization must pin psycopg2 explicitly. create_engine defers the
+    # actual connection, so building the engine here never touches a real
+    # database.
     engine = db.create_database_engine("postgres://u:p@h/db")
     try:
-        assert engine.url.drivername.startswith("postgresql")
+        assert engine.url.drivername == "postgresql+psycopg2"
     finally:
         engine.dispose()
