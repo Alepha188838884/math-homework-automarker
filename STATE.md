@@ -179,3 +179,15 @@
 - 并发冷缓存测试对旧代码只有概率性检出（30 次失败 8 次）；要稳定回归检测需用 monkeypatch 注入异常的确定性测试。
 - `_ANSWER_CACHE_LOCK` 仅进程内有效；多 uvicorn worker 跨进程竞态为既有问题，未处理。
 - 合适的并发数取决于方舟账号限流额度，上线后若出现 429 应调低 `GRADING_BATCH_CONCURRENCY`。
+
+## 2026-10-12 会话记录：CI 红 → 依赖漂移修复；Render 仍卡绑卡
+
+### 完成
+- push e46459b/75ac674 后 Backend Tests #7 红：1 failed / 117 passed。根因是 `SQLAlchemy>=2.0.30` 无上界，CI 装到 2.1.4，2.1 把裸 `postgresql://` 默认驱动改为 psycopg v3，而仓库只装了 psycopg2-binary。与并发批改改动无关（干净环境 checkout c8656a8 同样失败）。
+- 修复 `da92271`：`normalize_database_url` 把 `postgres://` 和裸 `postgresql://` 显式改写为 `postgresql+psycopg2://`。SQLAlchemy 2.0.46 与 2.1.4 环境均 119 passed；CI 三个 workflow（Backend #8 / Frontend #6 / Docker #4）全绿。
+- Render：Billing 仍为 "No card on file"，未创建任何资源。
+
+### 已验证事实 / 教训
+- requirements.txt 全部是 `>=` 无上界，CI 和 Docker 每次都会装到最新版本，"本地过、CI 不过"大多是这个原因。本地对比要用干净 venv + `env -i` 复现。
+- 新装环境的 openai SDK 已经是 3.x 大版本（http 依赖也改名为 httpx2）。测试会 mock 模型调用，所以发现不了问题；**生产镜像真实批改可能受影响，部署前应该用新版依赖跑一次真实批改冒烟，或者给 openai 加上界**。
+- 子代理用 gh 查私有仓库 CI 返回 404（GITHUB_TOKEN 身份没有权限）；切换 keyring 账号或提取 token 会被 auto-mode 拦截。改为只读访问浏览器里的 Actions 页面。
