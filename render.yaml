@@ -15,7 +15,9 @@ services:
       - key: APP_DATA_DIR
         value: /var/data/mathhomeworkautomarker
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: mathhomeworkautomarker-db
+          property: connectionString
       - key: AUTH_SECRET_KEY
         generateValue: true
       - key: GRADING_PROVIDER
@@ -43,3 +45,8 @@ services:
     envVars:
       - key: VITE_API_BASE_URL
         value: https://mathhomeworkautomarker-backend.onrender.com
+
+databases:
+  - name: mathhomeworkautomarker-db
+    plan: basic-256mb
+    region: singapore
