@@ -191,3 +191,23 @@
 - requirements.txt 全部是 `>=` 无上界，CI 和 Docker 每次都会装到最新版本，"本地过、CI 不过"大多是这个原因。本地对比要用干净 venv + `env -i` 复现。
 - 新装环境的 openai SDK 已经是 3.x 大版本（http 依赖也改名为 httpx2）。测试会 mock 模型调用，所以发现不了问题；**生产镜像真实批改可能受影响，部署前应该用新版依赖跑一次真实批改冒烟，或者给 openai 加上界**。
 - 子代理用 gh 查私有仓库 CI 返回 404（GITHUB_TOKEN 身份没有权限）；切换 keyring 账号或提取 token 会被 auto-mode 拦截。改为只读访问浏览器里的 Actions 页面。
+
+## 2026-10-21 会话记录：Render 首次部署上线
+
+### 完成
+- 部署前把 openai 上限锁为 `<3`（`8f537b8`）：生产镜像原本会装到未经真实批改验证的 3.x；pytest 119 passed。
+- 中途试过改用外部 Neon 免费 Postgres（`731530a`），因为需要用户另外注册账号、手工粘贴 DATABASE_URL，已撤回为 Render 自带数据库（`99dfb0c`，render.yaml 与 `3570d75` 完全一致）。
+- Render Blueprint `mathhomeworkautomarker` 已从 `99dfb0c` 部署：db（PostgreSQL 18，Basic-256mb，新加坡）、backend（Docker Starter + 1GB 磁盘，新加坡，服务 ID srv-dbc67ndg1s2s7396rmdg）、frontend（Static）。费用约 $13.25/月，用户已确认。
+- 首次构建约 4 分钟即上线，`alembic upgrade head` preDeploy 通过；实际子域名与 render.yaml 一致，无需修改 URL。
+- 线上验收：`/health` 返回 `{"status":"ok"}`；前端首页和 SPA 路由都是 200；前端 bundle 指向的后端地址正确；CORS 只放行前端 origin；配置 `TEACHER_SIGNUP_CODE` 并重新部署后，用错误邀请码调 `/auth/bootstrap-teacher` 返回 403「邀请码不正确，无法注册新教师账号。」
+- 网址：前端 https://mathhomeworkautomarker-frontend.onrender.com ，后端 https://mathhomeworkautomarker-backend.onrender.com
+
+### 未完成 / 待用户
+- **线上真实批改冒烟未跑**：在生产站注册账号必须由用户本人操作。用户需要用邀请码注册第一个教师账号，上传答案和学生作业各一份，完成一次端到端批改验收。
+- `DASHSCOPE_API_KEY` 在 Render 上留空，Qwen 备选通道目前不可用（主通道是豆包，不受影响）。
+
+### 已验证事实 / 教训
+- 密钥不能由 Claude 填进网页表单；可行的做法是用 `pbcopy` 从 `.env.local` 把值放进剪贴板（不打印），再由用户 ⌘V 粘贴。
+- Chrome 扩展没有 github.com 的访问权限；Render GitHub App 的仓库授权要由用户操作，或者先给扩展开 github.com 权限。
+- Render Blueprint 表单只在点 Connect 时读取一次 render.yaml，推送新改动后要重新走 select-repo → Connect 才会刷新。
+- Render 自带的免费 Postgres 30 天后过期，不适合生产；外部免费 Postgres（Neon）可行，但会多一个需要用户注册的厂商。
