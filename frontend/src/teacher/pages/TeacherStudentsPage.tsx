@@ -16,6 +16,7 @@ function TeacherStudentsPage() {
   const [message, setMessage] = useState<StatusMessage | null>(null);
   const [resetStudentId, setResetStudentId] = useState<number | null>(null);
   const [resetPassword, setResetPassword] = useState("");
+  const [isResetting, setIsResetting] = useState(false);
 
   const handleCreate = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -39,22 +40,29 @@ function TeacherStudentsPage() {
   };
 
   const startReset = (studentId: number) => {
+    setMessage(null);
     setResetStudentId(studentId);
     setResetPassword("");
   };
 
   const cancelReset = () => {
+    setMessage(null);
     setResetStudentId(null);
     setResetPassword("");
   };
 
   const handleResetPassword = async (studentId: number) => {
-    if (selectedCourseId === null) return;
+    if (selectedCourseId === null || isResetting) return;
     if (resetPassword.length < 8) {
       setMessage({ type: "error", text: "密码至少 8 位。" });
       return;
     }
-    await resetStudentPasswordAction(selectedCourseId, studentId, resetPassword);
+    setIsResetting(true);
+    try {
+      await resetStudentPasswordAction(selectedCourseId, studentId, resetPassword);
+    } finally {
+      setIsResetting(false);
+    }
     cancelReset();
   };
 
@@ -93,7 +101,7 @@ function TeacherStudentsPage() {
                               {resetStudentId === s.id ? (
                                 <>
                                   <input className="form-input" style={{ minWidth: "160px", flex: 1 }} type="password" placeholder="新密码（至少 8 位）" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} />
-                                  <button type="button" className="btn btn-primary" onClick={() => void handleResetPassword(s.id)}>确认重置</button>
+                                  <button type="button" className="btn btn-primary" disabled={isResetting} onClick={() => void handleResetPassword(s.id)}>确认重置</button>
                                   <button type="button" className="btn btn-secondary" onClick={cancelReset}>取消</button>
                                 </>
                               ) : (
