@@ -211,3 +211,25 @@
 - Chrome 扩展没有 github.com 的访问权限；Render GitHub App 的仓库授权要由用户操作，或者先给扩展开 github.com 权限。
 - Render Blueprint 表单只在点 Connect 时读取一次 render.yaml，推送新改动后要重新走 select-repo → Connect 才会刷新。
 - Render 自带的免费 Postgres 30 天后过期，不适合生产；外部免费 Postgres（Neon）可行，但会多一个需要用户注册的厂商。
+
+## 2026-10-21/22 会话记录：教师手册 + 两轮端到端测试 + UTC+8 修复
+
+### 完成
+- 教师使用手册：Claude Docs https://claude.ai/artifact/ELvx26SXX3rJpoj5TdN6LQ ，PDF 导出到 `docs/教师使用手册.pdf`（未提交 git）。
+- 第一轮本机 E2E（fast-worker 驱动 Chrome，sqlite，`GRADING_BATCH_CONCURRENCY=1`）：26 个检查点中 24 个完全通过、2 个部分通过。报告 `docs/e2e_test_2026-10-21.md`，GIF 在 `test_data/e2e_run/`（均未提交）。批改结果：基线 `1.pdf` 19/19（40 秒）；手写照片版 17.5/19；用 L1 答案批 L2 作业得 0/19，且全部标记待人工复核——**没有放水**。
+- 第二轮线上冒烟（教师注册和学生初始密码由用户操作，其余由 Claude 完成）：建班级、加入链接（指向线上前端）、建作业、上传答案 docx（Docker 里 LibreOffice 转换正常，磁盘写入正常）、手动添加学生、以老师身份调 `POST /assignments/1/submissions` 替学生上传 `1.pdf`、真实批改 **19/19**（约 1.5 分钟）、人工改分后总分 18/19、批量批改跳过已批改的提交。学生端查看成绩的线上验证未做（可选）。
+- UTC+8 修复（`377357c` + `bab6a0c`，已推送并部署）：`formatDateTime` 把不带时区标记的时间按 UTC 解析，统一按 `timeZone: Asia/Shanghai` 显示；截止日期输入按 +08:00 解释。后端和接口格式都没改。工作流里 3 个独立审查员通过，pytest 119 passed。线上已确认创建时间显示为北京时间。
+
+### 待办 / 已知问题
+- 线上测试数据（线上测试班 / 测试学生 / 测试作业）还在，删除要用户自己点。
+- 重置学生密码用的是 `window.prompt`（TeacherStudentsPage.tsx:41）：新密码明文显示，而且 Chrome 扩展遇到会卡死。
+- 作业「满分」默认 100，和批改的 `max_total_score`（按答案题目算出的 19）口径不一致，老师会困惑。
+- `StudentJoinRequest.email` 用的是 EmailStr，只拒绝保留域名（example.test 等）；真实邮箱不受影响。
+- 手册要补两点：填了姓名才会出现邀请码框；所有时间按北京时间显示。
+
+### 已验证事实 / 教训
+- 后端的 datetime 都是 naive UTC，只有 `due_date` 序列化时带 Z；其他时间字段不带时区，前端必须按 UTC 解析。
+- 在正式站点上，注册账号和输入密码登录必须由用户操作；本机 localhost 或名字带 staging/test 的环境可以由 Claude 完成。以后想做全自动线上回归，就要另建 staging 服务。
+- 页面上的 `window.confirm` / `window.prompt` 会让 Chrome 扩展卡死；confirm 可以先注入 `window.confirm = () => true` 绕过，prompt 不行。
+- 读页面文本（get_page_text）看不到输入框里的值，要用 javascript_tool 读 `input.value`，否则会以为表单是空的而重复填写。
+- Chrome 扩展重连后，原来的标签组会丢失，要用 `tabs_context_mcp(createIfEmpty)` 重新建。
