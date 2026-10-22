@@ -21,11 +21,13 @@ export function formatDateTime(value: string | null | undefined): string {
   if (!value) {
     return "-";
   }
-  const date = new Date(value);
+  // Backend may omit a timezone designator on naive-UTC timestamps; treat those as UTC.
+  const hasTimezone = /(Z|[+-]\d{2}:?\d{2})$/i.test(value);
+  const date = new Date(hasTimezone ? value : `${value}Z`);
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleString("zh-CN", { dateStyle: "medium", timeStyle: "short" });
+  return date.toLocaleString("zh-CN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Shanghai" });
 }
 
 export function isPdfFile(file: File): boolean {

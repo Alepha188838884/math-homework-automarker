@@ -23,7 +23,8 @@ function TeacherAssignmentsPage() {
     if (selectedCourseId === null) { setMessage({ type: "error", text: "请先选择班级。" }); return; }
     try {
       setIsCreating(true);
-      const due = dueDate.trim() ? new Date(dueDate).toISOString() : undefined;
+      // datetime-local has no timezone; interpret the entered wall-clock time as Asia/Shanghai (UTC+8).
+      const due = dueDate.trim() ? new Date(`${dueDate}:00+08:00`).toISOString() : undefined;
       let ms: number | undefined;
       if (maxScore.trim()) {
         const p = Number(maxScore);
