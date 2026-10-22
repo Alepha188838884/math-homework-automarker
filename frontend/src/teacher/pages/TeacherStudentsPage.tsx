@@ -14,6 +14,8 @@ function TeacherStudentsPage() {
   const [newPassword, setNewPassword] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [message, setMessage] = useState<StatusMessage | null>(null);
+  const [resetStudentId, setResetStudentId] = useState<number | null>(null);
+  const [resetPassword, setResetPassword] = useState("");
 
   const handleCreate = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -36,15 +38,24 @@ function TeacherStudentsPage() {
     }
   };
 
-  const handleResetPassword = (studentId: number) => {
+  const startReset = (studentId: number) => {
+    setResetStudentId(studentId);
+    setResetPassword("");
+  };
+
+  const cancelReset = () => {
+    setResetStudentId(null);
+    setResetPassword("");
+  };
+
+  const handleResetPassword = async (studentId: number) => {
     if (selectedCourseId === null) return;
-    const newPassword = window.prompt("请输入该学生的新密码：");
-    if (newPassword === null) return;
-    if (newPassword.length < 8) {
+    if (resetPassword.length < 8) {
       setMessage({ type: "error", text: "密码至少 8 位。" });
       return;
     }
-    void resetStudentPasswordAction(selectedCourseId, studentId, newPassword);
+    await resetStudentPasswordAction(selectedCourseId, studentId, resetPassword);
+    cancelReset();
   };
 
   return (
@@ -79,7 +90,15 @@ function TeacherStudentsPage() {
                           <td>
                             <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                               <button type="button" className="btn btn-danger" onClick={() => handleRemoveStudent(s.id)}>移除</button>
-                              <button type="button" className="btn btn-secondary" onClick={() => handleResetPassword(s.id)}>重置密码</button>
+                              {resetStudentId === s.id ? (
+                                <>
+                                  <input className="form-input" style={{ minWidth: "160px", flex: 1 }} type="password" placeholder="新密码（至少 8 位）" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} />
+                                  <button type="button" className="btn btn-primary" onClick={() => void handleResetPassword(s.id)}>确认重置</button>
+                                  <button type="button" className="btn btn-secondary" onClick={cancelReset}>取消</button>
+                                </>
+                              ) : (
+                                <button type="button" className="btn btn-secondary" onClick={() => startReset(s.id)}>重置密码</button>
+                              )}
                             </div>
                           </td>
                         </tr>

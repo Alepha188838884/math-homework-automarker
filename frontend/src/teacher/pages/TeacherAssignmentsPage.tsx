@@ -13,7 +13,6 @@ function TeacherAssignmentsPage() {
   const [title, setTitle] = useState("");
   const [desc, setDesc] = useState("");
   const [dueDate, setDueDate] = useState("");
-  const [maxScore, setMaxScore] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [message, setMessage] = useState<StatusMessage | null>(null);
 
@@ -25,16 +24,10 @@ function TeacherAssignmentsPage() {
       setIsCreating(true);
       // datetime-local has no timezone; interpret the entered wall-clock time as Asia/Shanghai (UTC+8).
       const due = dueDate.trim() ? new Date(`${dueDate.length === 16 ? `${dueDate}:00` : dueDate}+08:00`).toISOString() : undefined;
-      let ms: number | undefined;
-      if (maxScore.trim()) {
-        const p = Number(maxScore);
-        if (!Number.isFinite(p) || p <= 0) { setMessage({ type: "error", text: "max_score 必须是正数。" }); return; }
-        ms = p;
-      }
-      const a = await createAssignment(selectedCourseId, { title: title.trim(), description: desc.trim() || undefined, due_date: due, max_score: ms });
+      const a = await createAssignment(selectedCourseId, { title: title.trim(), description: desc.trim() || undefined, due_date: due });
       await loadAssignmentsForCourse(selectedCourseId);
       setSelectedAssignmentId(a.id);
-      setTitle(""); setDesc(""); setDueDate(""); setMaxScore("");
+      setTitle(""); setDesc(""); setDueDate("");
       setMessage({ type: "success", text: "作业创建成功。" });
     } catch (error) { setMessage({ type: "error", text: getErrorMessage(error) }); }
     finally { setIsCreating(false); }
@@ -77,11 +70,11 @@ function TeacherAssignmentsPage() {
                 ) : (
                   <div className="table-wrap">
                     <table className="data-table">
-                      <thead><tr><th>ID</th><th>标题</th><th>截止日期</th><th>满分</th><th>创建时间</th><th>操作</th></tr></thead>
+                      <thead><tr><th>ID</th><th>标题</th><th>截止日期</th><th>创建时间</th><th>操作</th></tr></thead>
                       <tbody>
                         {courseAssignments.map((a) => (
                           <tr key={a.id}>
-                            <td>{a.id}</td><td>{a.title}</td><td>{formatDateTime(a.due_date)}</td><td>{a.max_score ?? "-"}</td><td>{formatDateTime(a.created_at)}</td>
+                            <td>{a.id}</td><td>{a.title}</td><td>{formatDateTime(a.due_date)}</td><td>{formatDateTime(a.created_at)}</td>
                             <td><button type="button" className="btn btn-danger" onClick={() => handleDeleteAssignment(a.id)}>删除</button></td>
                           </tr>
                         ))}
@@ -100,7 +93,6 @@ function TeacherAssignmentsPage() {
               <label className="form-group"><span className="form-label">标题</span><input className="form-input" value={title} onChange={(e) => setTitle(e.target.value)} required /></label>
               <label className="form-group"><span className="form-label">描述（可选）</span><input className="form-input" value={desc} onChange={(e) => setDesc(e.target.value)} /></label>
               <label className="form-group"><span className="form-label">截止日期（可选）</span><input className="form-input" type="datetime-local" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></label>
-              <label className="form-group"><span className="form-label">满分（可选）</span><input className="form-input" type="number" min="0" step="0.5" placeholder="默认 100" value={maxScore} onChange={(e) => setMaxScore(e.target.value)} /></label>
               <button type="submit" className="btn btn-primary" disabled={isCreating}>{isCreating ? "创建中..." : "创建作业"}</button>
             </form>
           </div>
