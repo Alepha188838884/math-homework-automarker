@@ -93,23 +93,32 @@ function TeacherStudentsPage() {
                     <thead><tr><th>ID</th><th>姓名</th><th>邮箱</th><th>操作</th></tr></thead>
                     <tbody>
                       {courseStudents.map((s) => (
-                        <tr key={s.id}>
-                          <td>{s.id}</td><td>{s.name}</td><td>{s.email}</td>
-                          <td>
-                            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                              <button type="button" className="btn btn-danger" onClick={() => handleRemoveStudent(s.id)}>移除</button>
-                              {resetStudentId === s.id ? (
-                                <>
-                                  <input className="form-input" style={{ minWidth: "160px", flex: 1 }} type="password" placeholder="新密码（至少 8 位）" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} />
+                        <React.Fragment key={s.id}>
+                          <tr>
+                            <td>{s.id}</td><td>{s.name}</td><td>{s.email}</td>
+                            <td>
+                              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                                <button type="button" className="btn btn-danger" onClick={() => handleRemoveStudent(s.id)}>移除</button>
+                                {resetStudentId === s.id ? (
+                                  <button type="button" className="btn btn-secondary" disabled>重置密码</button>
+                                ) : (
+                                  <button type="button" className="btn btn-secondary" onClick={() => startReset(s.id)}>重置密码</button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                          {resetStudentId === s.id && (
+                            <tr>
+                              <td colSpan={4}>
+                                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
+                                  <input className="form-input" style={{ flex: 1, minWidth: "200px" }} type="password" placeholder="新密码（至少 8 位）" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} />
                                   <button type="button" className="btn btn-primary" disabled={isResetting} onClick={() => void handleResetPassword(s.id)}>确认重置</button>
                                   <button type="button" className="btn btn-secondary" onClick={cancelReset}>取消</button>
-                                </>
-                              ) : (
-                                <button type="button" className="btn btn-secondary" onClick={() => startReset(s.id)}>重置密码</button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
                       ))}
                     </tbody>
                   </table>
