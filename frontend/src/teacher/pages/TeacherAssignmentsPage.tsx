@@ -24,7 +24,7 @@ function TeacherAssignmentsPage() {
     try {
       setIsCreating(true);
       // datetime-local has no timezone; interpret the entered wall-clock time as Asia/Shanghai (UTC+8).
-      const due = dueDate.trim() ? new Date(`${dueDate}:00+08:00`).toISOString() : undefined;
+      const due = dueDate.trim() ? new Date(`${dueDate.length === 16 ? `${dueDate}:00` : dueDate}+08:00`).toISOString() : undefined;
       let ms: number | undefined;
       if (maxScore.trim()) {
         const p = Number(maxScore);
